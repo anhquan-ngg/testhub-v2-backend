@@ -1,0 +1,163 @@
+// This is a sample model to get you started.
+
+/// A sample data source using local PostgreSQL db.
+datasource db {
+    provider = 'postgresql'
+    url = env("DATABASE_URL")
+}
+
+generator client {
+    provider = "prisma-client-js"
+}
+
+enum UserRole {
+    ADMIN 
+    LECTURER
+    STUDENT
+}
+
+enum QuestionType {
+    SINGLE_CHOICE
+    MULTIPLE_CHOICE
+    ESSAY
+}
+
+enum QuestionFormat {
+    KNOWLEDGE
+    UNDERSTANDING
+    APPLYING
+    ADVANCED
+}
+
+enum Rating {
+    EXCELLENT
+    GOOD
+    AVERAGE
+    POOR
+}
+
+abstract model Base {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+
+  @@allow('all', auth() != null)
+}
+
+model User extends Base {
+    full_name String 
+    email    String @unique @email @length(6, 32)
+    password String @password @omit
+    role UserRole @default(STUDENT)
+    auth_provider String @default('local')
+    provider_id String?
+
+    exams Exam[]
+    questions Question[]
+    submissions Submission[]
+
+    // // everybody can signup
+    // @@allow('create', true)
+    // @@allow('read', startsWith(email, 'john'))
+    // // full access by self
+    // @@allow('all', auth() == this)
+
+    // map tables
+    @@map("users")
+}
+
+model Exam extends Base {
+    lecturer_id String @db.Uuid
+    topic String
+    title String 
+    exam_start_time DateTime
+    exam_end_time DateTime
+    duration Int
+    practice Boolean @default(false)
+
+    submissions Submission[]
+    questions ExamQuestions[]
+
+    // relation fields
+    lecturer User @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
+
+    // map tables
+    @@map("exams")
+}
+
+model Submission extends Base {
+    exam_id String @db.Uuid
+    student_id String @db.Uuid
+    total_score Decimal?
+    rating Rating?
+    start_time DateTime 
+    end_time DateTime
+
+    questions SubmissionQuestions[]
+
+    // relation fields
+    exam Exam @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+    student User @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+
+    // map tables
+    @@map("submissions")
+}
+
+model Question extends Base {
+    lecturer_id String @db.Uuid 
+    question_text String 
+    topic String 
+    option String?
+    correct_answer String? 
+    image_url String?
+    question_type QuestionType
+    question_format QuestionFormat
+
+    submissions SubmissionQuestions[]
+    exams ExamQuestions[]
+    // relation fields 
+    lecturer User @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
+
+    // map tables
+    @@map("questions")
+}
+
+model ExamQuestions extends Base {
+    exam_id String @db.Uuid
+    question_id String @db.Uuid
+
+    // relation fields
+    exam Exam @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+    question Question @relation(fields: [question_id], references: [id], onDelete: Cascade)
+
+    @@unique([exam_id, question_id])
+    @@map("exam_questions")
+}
+
+model SubmissionQuestions extends Base {
+    submission_id String @db.Uuid
+    question_id String @db.Uuid
+    options String?
+    answer String?
+    score Decimal?
+    is_correct Boolean @default(false)
+
+    // relation fields
+    submission Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
+    question Question @relation(fields: [question_id], references: [id], onDelete: Cascade)
+
+    @@unique([submission_id, question_id])
+    @@map("submission_questions")
+}
+
+/*
+Generate Prisma schema & client:
+
+- npx zenstack generate
+
+- npx prisma db push
+
+You may use the --force-reset flag to drop the database before push like: npx prisma db push --force-reset
+
+*/
