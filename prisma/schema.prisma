@@ -12,18 +12,28 @@ generator client {
   provider = "prisma-client-js"
 }
 
+/// Enum for users.role
 enum UserRole {
   ADMIN
   LECTURER
   STUDENT
 }
 
+/// Enum for exams.status
+enum ExamStatus {
+  PENDING
+  ACTIVE
+  INACTIVE
+}
+
+/// Enum for questions.question_type
 enum QuestionType {
   SINGLE_CHOICE
   MULTIPLE_CHOICE
   ESSAY
 }
 
+/// Enum for questions.question_format
 enum QuestionFormat {
   KNOWLEDGE
   UNDERSTANDING
@@ -31,6 +41,7 @@ enum QuestionFormat {
   ADVANCED
 }
 
+/// Enum for submissions.rating
 enum Rating {
   EXCELLENT
   GOOD
@@ -66,6 +77,7 @@ model Exam {
   exam_end_time   DateTime
   duration        Int
   practice        Boolean         @default(false)
+  status          ExamStatus      @default(PENDING)
   submissions     Submission[]
   questions       ExamQuestions[]
   lecturer        User            @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)

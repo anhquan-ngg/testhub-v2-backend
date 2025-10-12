@@ -1,20 +1,20 @@
 import { PrismaClient } from '@prisma/client';
+import { enhance } from '@zenstackhq/runtime';
 
 const prisma = new PrismaClient();
+const db = enhance(prisma);
 
 async function main() {
-  // clean up
-  await prisma.user.deleteMany();
+  const admin = await db.user.create({
+    data: {
+      full_name: 'Nguyễn Anh Quân',
+      email: 'nanhquan143@gmail.com',
+      password: '123456',
+      role: 'ADMIN',
+    },
+  });
 
-  // const john = await prisma.user.create({
-  //   data: {
-  //     email: 'john@testhub.dev',
-  //     fullName: 'John Doe',
-  //     password: '123456',
-  //   },
-  // });
-
-  // console.log('User created:', john);
+  console.log('User created:', admin);
 }
 
 main()
