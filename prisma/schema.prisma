@@ -41,6 +41,12 @@ enum QuestionFormat {
   ADVANCED
 }
 
+enum SelectionMode {
+  MANUAL
+  RANDOM_N
+  BY_TYPE
+}
+
 /// Enum for submissions.rating
 enum Rating {
   EXCELLENT
@@ -56,6 +62,7 @@ model User {
   full_name     String
   email         String       @unique()
   password      String
+  avatar_url    String?
   role          UserRole     @default(STUDENT)
   auth_provider String       @default("local")
   provider_id   String?
@@ -77,6 +84,9 @@ model Exam {
   exam_end_time   DateTime
   duration        Int
   practice        Boolean         @default(false)
+  mode            SelectionMode   @default(MANUAL)
+  sample_size     Int?
+  distribution    String?
   status          ExamStatus      @default(PENDING)
   submissions     Submission[]
   questions       ExamQuestions[]
@@ -109,7 +119,7 @@ model Question {
   lecturer_id     String                @db.Uuid()
   question_text   String
   topic           String
-  option          String?
+  options         String?
   correct_answer  String?
   image_url       String?
   question_type   QuestionType

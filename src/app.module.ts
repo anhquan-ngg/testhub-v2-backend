@@ -1,41 +1,52 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { PrismaModule } from './modules/prisma/prisma.module';
-import { PrismaService } from './modules/prisma/prisma.service';
+import { PrismaModule } from './prisma/prisma.module';
+import { PrismaService } from './prisma/prisma.service';
 import { ZenStackModule } from '@zenstackhq/server/nestjs';
 import { enhance } from '@zenstackhq/runtime';
-import { JwtService } from '@nestjs/jwt';
-import { AuthModule } from './modules/auth/auth.module';
 import { ConfigModule } from '@nestjs/config';
+import { AuthModule } from './auth/auth.module';
+import type { Request } from 'express';
+import { REQUEST } from '@nestjs/core';
+import { MinioModule } from './minio/minio.module';
 
 @Module({
   imports: [
-    // ZenStackModule.registerAsync({
-    //   useFactory: (prisma: PrismaService, jwt: JwtService) => {
-    //     return {
-    //       getEnhancedPrisma: (req: any) => {
-    //         const authHeader = req.headers['authorization'];
-    //         if (!authHeader) return enhance(prisma, { user: undefined });
-
-    //         const token = authHeader.split(' ')[1];
-    //         try {
-    //           const decoded = jwt.verify(token);
-    //           return enhance(prisma, { user: decoded });
-    //         } catch {
-    //           return enhance(prisma, { user: undefined });
-    //         }
-    //       },
-    //     };
-    //   },
-    //   inject: [PrismaService, JwtService],
-    //   extraProviders: [PrismaService],
-    // }),
+    // ConfigModule phải được import đầu tiên để các module khác có thể sử dụng
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    PrismaModule,
+    // AuthModule phải được import trước CrudModule để strategy được đăng ký
     AuthModule,
+
+    PrismaModule,
+    ZenStackModule.registerAsync({
+      useFactory: (request: Request, prisma: PrismaService) => {
+        console.log('=== ZenStack Current User Context ===');
+        console.log(JSON.stringify(request?.user, null, 2));
+        console.log('=====================================');
+        return {
+          getEnhancedPrisma: () =>
+            enhance(prisma, { user: request.user }, { logPrismaQuery: true }),
+        };
+      },
+      inject: [REQUEST, PrismaService],
+      extraProviders: [PrismaService],
+      global: true,
+    }),
+    MinioModule,
+    // ZenStackModule.registerAsync({
+    //   useFactory: (prisma: PrismaService) => ({
+    //     getEnhancedPrisma: (req?: any) => {
+    //       // build user context từ request (tuỳ auth)
+    //       const user = req?.user ?? null;
+    //       return enhance(prisma, { user });
+    //     },
+    //   }),
+    //   inject: [PrismaService],
+    //   extraProviders: [PrismaService],
+    // }),
   ],
   controllers: [AppController],
   providers: [AppService, PrismaService],

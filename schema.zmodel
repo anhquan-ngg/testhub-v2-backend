@@ -7,6 +7,11 @@ generator client {
     provider = "prisma-client-js"
 }
 
+plugin trpc {
+    provider = "@zenstackhq/trpc"
+    output   = "./generated"
+}
+
 /// Enum for users.role
 enum UserRole {
     ADMIN 
@@ -36,6 +41,12 @@ enum QuestionFormat {
     ADVANCED
 }
 
+enum SelectionMode {
+    MANUAL
+    RANDOM_N
+    BY_TYPE
+}
+
 /// Enum for submissions.rating
 enum Rating {
     EXCELLENT
@@ -49,13 +60,15 @@ abstract model Base {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt()
 
-  @@allow('all', auth() != null)
+//   @@allow('all', auth() != null)
+    @@allow('all', true)
 }
 
 model User extends Base {
     full_name String 
     email    String @unique @email @length(6, 32)
     password String @password
+    avatar_url String?
     role UserRole @default(STUDENT) @deny('update', auth().role != 'ADMIN')
     auth_provider String @default('local')
     provider_id String?
@@ -67,10 +80,13 @@ model User extends Base {
     // map tables
     @@map("users")
 
-    // rules
-    @@allow('all', auth().role == 'ADMIN')
-    @@allow('create', true)
-    @@allow('read', true) // temp rule
+    // // rules - đơn giản để tránh Zod schema conflict
+    // @@allow('all', auth().role == 'ADMIN')
+    // @@allow('create', true)
+    // @@allow('read', true)
+    // @@allow('update', auth() == this) // Chỉ user tự update được profile của mình
+
+    @@allow('all', true)
 
     // Lifecycle hook
     // @@on('create', { password = hash(password) })
@@ -85,6 +101,9 @@ model Exam extends Base {
     exam_end_time DateTime
     duration Int
     practice Boolean @default(false)
+    mode SelectionMode @default(MANUAL)
+    sample_size Int?
+    distribution String?
     status ExamStatus @default(PENDING)
 
     submissions Submission[]
@@ -97,11 +116,18 @@ model Exam extends Base {
     @@map("exams")
     
     // rules
-    @@allow('all', auth().role == 'ADMIN')
-    @@allow('create, update', auth() == lecturer && auth().role == 'LECTURER')
-    @@allow('read', auth() != null)
+    // @@allow('all', auth().role == 'ADMIN')
+    // @@allow('create, update', auth() == lecturer && auth().role == 'LECTURER')
+    // // @@allow('read', auth() != null)
+    // @@allow('read', true)
 
-    @@deny('update', submissions?[true])
+    // @@deny('update', submissions?[true])
+
+    // temp rules
+    @@allow('read', true)
+    @@allow('create', true)
+    @@allow('update', true)
+    @@allow('delete', true)
 }
 
 model Submission extends Base {
@@ -132,7 +158,7 @@ model Question extends Base {
     lecturer_id String @db.Uuid 
     question_text String 
     topic String 
-    option String?
+    options String?
     correct_answer String? 
     image_url String?
     question_type QuestionType
@@ -147,11 +173,16 @@ model Question extends Base {
     @@map("questions")
 
     // rules 
-    @@allow('all', auth().role == 'ADMIN')
-    @@allow('create', auth().role == 'LECTURER')
-    @@allow('read', auth().role == 'STUDENT' || (auth().role == 'LECTURER' && lecturer == auth()))
-    @@allow('update', auth().role == 'LECTURER' && lecturer == auth())
+    // @@allow('all', auth().role == 'ADMIN')
+    // @@allow('create', auth().role == 'LECTURER')
+    // @@allow('read', auth().role == 'STUDENT' || (auth().role == 'LECTURER' && lecturer == auth()))
+    // @@allow('update', auth().role == 'LECTURER' && lecturer == auth())
 
+    // temp rules
+    @@allow('read', true)
+    @@allow('create', true)
+    @@allow('update', true)
+    @@allow('delete', true)
 }
 
 model ExamQuestions extends Base {
