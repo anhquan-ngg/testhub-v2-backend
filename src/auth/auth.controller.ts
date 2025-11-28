@@ -21,6 +21,7 @@ import { LoginDto } from './dto/login.dto';
 import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import type { Response } from 'express';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -48,7 +49,6 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
   async login(
     @Body() loginDto: LoginDto,
-    @Req() req: any,
     @Res({ passthrough: true }) response: Response,
   ) {
     const { access_token, data } = await this.authService.login(loginDto);
@@ -90,5 +90,23 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
   getCurrentUser(@Req() req: any) {
     return req.user || null;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @Post('change-password')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change password' })
+  @ApiResponse({
+    status: 200,
+    description: 'Update password successfully.',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
+  async changePassword(
+    @Body() changePasswordDto: ChangePasswordDto,
+    @Req() req: any,
+  ) {
+    const userId = req.user.id;
+    return this.authService.changePassword(changePasswordDto, userId);
   }
 }

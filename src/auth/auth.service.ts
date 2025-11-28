@@ -18,6 +18,7 @@ import {
   INTERNAL_PRISMA_CLIENT,
   POLICY_AWARE_PRISMA_CLIENT,
 } from '@/prisma/prisma.module';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 type EnhancedPrismaClient = Omit<
   PrismaClient,
@@ -143,6 +144,7 @@ export class AuthService {
       id: user.id,
       email: user.email,
       full_name: user.full_name,
+      avatar_url: user.avatar_url,
       role: user.role,
     };
 
@@ -159,22 +161,53 @@ export class AuthService {
     });
   }
 
-  // async getUserById(userId: string) {
-  //   const user = await this.policyAwarePrisma.user.findUnique({
-  //     where: { id: userId },
-  //   });
+  async changePassword(changePasswordDto: ChangePasswordDto, userId: string) {
+    if (!changePasswordDto.currentPassword || !changePasswordDto.newPassword) {
+      throw new BadRequestException(
+        'Current password or new password is empty',
+      );
+    }
 
-  //   if (!user) {
-  //     throw new BadRequestException('User not found');
-  //   }
+    // Sử dụng internalPrisma để đảm bảo luôn lấy được user
+    // không bị ràng buộc bởi access policy
+    const user = await this.internalPrisma.user.findUnique({
+      where: { id: userId },
+    });
 
-  //   const userProfile = {
-  //     id: user.id,
-  //     email: user.email,
-  //     full_name: user.full_name,
-  //     role: user.role,
-  //   };
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
 
-  //   return { userProfile };
-  // }
+    // Kiểm tra mật khẩu hiện tại có đúng không
+    const isPasswordMatch = await bcrypt.compare(
+      changePasswordDto.currentPassword,
+      user.password,
+    );
+
+    if (!isPasswordMatch) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    // Kiểm tra mật khẩu mới có trùng với mật khẩu cũ không
+    const isSamePassword = await bcrypt.compare(
+      changePasswordDto.newPassword,
+      user.password,
+    );
+
+    if (isSamePassword) {
+      throw new BadRequestException(
+        'New password must be different from current password',
+      );
+    }
+
+    // Cập nhật mật khẩu
+    await this.internalPrisma.user.update({
+      where: { id: userId },
+      data: { password: changePasswordDto.newPassword },
+    });
+
+    return {
+      message: 'Password changed successfully',
+    };
+  }
 }
