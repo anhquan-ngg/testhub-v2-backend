@@ -103,8 +103,8 @@ model Submission {
   student_id  String                @db.Uuid()
   total_score Decimal?
   rating      Rating?
-  start_time  DateTime
-  end_time    DateTime
+  start_time  DateTime?
+  end_time    DateTime?
   questions   SubmissionQuestions[]
   exam        Exam                  @relation(fields: [exam_id], references: [id], onDelete: Cascade)
   student     User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)

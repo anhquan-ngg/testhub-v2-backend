@@ -10,6 +10,7 @@ import { AuthModule } from './auth/auth.module';
 import type { Request } from 'express';
 import { REQUEST } from '@nestjs/core';
 import { MinioModule } from './minio/minio.module';
+import { SubmissionModule } from './submission/submission.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { MinioModule } from './minio/minio.module';
       global: true,
     }),
     MinioModule,
+    SubmissionModule,
     // ZenStackModule.registerAsync({
     //   useFactory: (prisma: PrismaService) => ({
     //     getEnhancedPrisma: (req?: any) => {

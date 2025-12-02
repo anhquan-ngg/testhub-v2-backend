@@ -135,8 +135,8 @@ model Submission extends Base {
     student_id String @db.Uuid
     total_score Decimal?
     rating Rating?
-    start_time DateTime 
-    end_time DateTime
+    start_time DateTime? 
+    end_time DateTime?
 
     questions SubmissionQuestions[]
 
