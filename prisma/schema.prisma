@@ -55,6 +55,12 @@ enum Rating {
   POOR
 }
 
+enum SubmissionStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id            String       @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
   created_at    DateTime     @default(now())
@@ -101,10 +107,11 @@ model Submission {
   updated_at  DateTime              @updatedAt()
   exam_id     String                @db.Uuid()
   student_id  String                @db.Uuid()
-  total_score Decimal?
+  total_score Decimal?              @db.Decimal(10, 2)
   rating      Rating?
   start_time  DateTime?
   end_time    DateTime?
+  status      SubmissionStatus      @default(IN_PROGRESS)
   questions   SubmissionQuestions[]
   exam        Exam                  @relation(fields: [exam_id], references: [id], onDelete: Cascade)
   student     User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
@@ -152,7 +159,7 @@ model SubmissionQuestions {
   question_id   String     @db.Uuid()
   options       String?
   answer        String?
-  score         Decimal?
+  score         Decimal?   @db.Decimal(10, 2)
   is_correct    Boolean    @default(false)
   submission    Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
   question      Question   @relation(fields: [question_id], references: [id], onDelete: Cascade)

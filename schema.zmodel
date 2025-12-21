@@ -55,6 +55,12 @@ enum Rating {
     POOR
 }
 
+enum SubmissionStatus {
+    IN_PROGRESS
+    COMPLETED
+    CANCELLED
+}
+
 abstract model Base {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   created_at DateTime @default(now())
@@ -133,10 +139,11 @@ model Exam extends Base {
 model Submission extends Base {
     exam_id String @db.Uuid
     student_id String @db.Uuid
-    total_score Decimal?
+    total_score Decimal? @db.Decimal(10, 2)
     rating Rating?
     start_time DateTime? 
     end_time DateTime?
+    status SubmissionStatus @default(IN_PROGRESS)
 
     questions SubmissionQuestions[]
 
@@ -206,7 +213,7 @@ model SubmissionQuestions extends Base {
     question_id String @db.Uuid
     options String?
     answer String?
-    score Decimal?
+    score Decimal? @db.Decimal(10, 2)
     is_correct Boolean @default(false)
 
     // relation fields

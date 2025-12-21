@@ -9,7 +9,9 @@ import {
   INTERNAL_PRISMA_CLIENT,
   POLICY_AWARE_PRISMA_CLIENT,
 } from '@/prisma/prisma.module';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Rating, SubmissionStatus } from '@prisma/client';
+import { SubmitQuestionDto } from './dto/submit-question.dto';
+import { SubmitExamDto } from './dto/submit-exam.dto';
 
 type EnhancedPrismaClient = Omit<
   PrismaClient,
@@ -113,6 +115,172 @@ export class SubmissionService {
         ...examData,
         questions: questions,
         submissionId: submission.id,
+      },
+    };
+  }
+
+  async submitByQuestion(submitQuestionDto: SubmitQuestionDto) {
+    const submission = await this.policyAwarePrisma.submission.findUnique({
+      where: {
+        id: submitQuestionDto.submission_id,
+      },
+    });
+
+    if (!submission) {
+      throw new NotFoundException('Submission not found');
+    }
+
+    const question = await this.policyAwarePrisma.question.findUnique({
+      where: {
+        id: submitQuestionDto.question_id,
+      },
+    });
+
+    if (!question) {
+      throw new NotFoundException('Question not found');
+    }
+
+    let is_correct = false;
+    let score = 0;
+
+    if (question.question_type === 'SINGLE_CHOICE' && question.options) {
+      if (!submitQuestionDto.options) {
+        throw new BadRequestException('Options is required');
+      }
+      const parsedQuestionsOption = JSON.parse(question.options);
+      const parsedOptions = JSON.parse(submitQuestionDto.options);
+
+      const chosenOption = parsedOptions.find(
+        (option: { text: string; isCorrect: boolean }) => option.isCorrect,
+      );
+
+      if (chosenOption) {
+        is_correct = parsedQuestionsOption.find(
+          (option: { text: string; isCorrect: boolean }) =>
+            option.text === chosenOption.text,
+        )?.isCorrect;
+        score = is_correct ? 1 : 0;
+      }
+    } else if (
+      question.question_type === 'MULTIPLE_CHOICE' &&
+      question.options
+    ) {
+      if (!submitQuestionDto.options) {
+        throw new BadRequestException('Options is required');
+      }
+
+      const parsedQuestionOptions = JSON.parse(question.options);
+
+      const correctAnswers = parsedQuestionOptions.filter(
+        (opt: { text: string; isCorrect?: boolean }) => opt.isCorrect !== false,
+      );
+
+      const parsedUserOptions = JSON.parse(submitQuestionDto.options);
+      const userSelectedTexts = new Set(
+        parsedUserOptions
+          .filter((opt: { isCorrect: boolean }) => opt.isCorrect)
+          .map((opt: { text: string }) => opt.text),
+      );
+
+      let correctMatches = 0;
+      correctAnswers.forEach((correctOpt) => {
+        if (userSelectedTexts.has(correctOpt.text)) {
+          correctMatches++;
+        }
+      });
+
+      const totalCorrect = correctAnswers.length;
+
+      if (totalCorrect > 0) {
+        score = correctMatches / totalCorrect;
+        is_correct = correctMatches === totalCorrect;
+      } else {
+        score = 0;
+        is_correct = false;
+      }
+    } else if (question.question_type === 'ESSAY' && question.correct_answer) {
+      if (!submitQuestionDto.answer) {
+        throw new BadRequestException('Answer is required');
+      }
+      is_correct = submitQuestionDto.answer === question.correct_answer;
+      score = is_correct ? 1 : 0;
+    }
+
+    const submissionQuestion =
+      await this.policyAwarePrisma.submissionQuestions.upsert({
+        where: {
+          submission_id_question_id: {
+            submission_id: submitQuestionDto.submission_id,
+            question_id: submitQuestionDto.question_id,
+          },
+        },
+        update: {
+          answer: submitQuestionDto.answer,
+          options: submitQuestionDto.options,
+          score: Math.round(score * 100) / 100,
+          is_correct,
+        },
+        create: {
+          submission_id: submitQuestionDto.submission_id,
+          question_id: submitQuestionDto.question_id,
+          answer: submitQuestionDto.answer,
+          options: submitQuestionDto.options,
+          score: Math.round(score * 100) / 100,
+          is_correct,
+        },
+      });
+
+    return {
+      data: {
+        submission_question_id: submissionQuestion.id,
+      },
+    };
+  }
+
+  async submitByExam(submitExamDto: SubmitExamDto) {
+    if (!submitExamDto.submission_id) {
+      throw new BadRequestException('Submission id is required');
+    }
+
+    const submittedQuestions =
+      await this.policyAwarePrisma.submissionQuestions.findMany({
+        where: {
+          submission_id: submitExamDto.submission_id,
+        },
+      });
+
+    const totalScore =
+      (submittedQuestions.reduce(
+        (total: number, question) =>
+          total + (question.score ? Number(question.score) : 0),
+        0,
+      ) *
+        10) /
+      submitExamDto.question_length;
+
+    let rating: Rating;
+
+    if (totalScore >= 9) rating = 'EXCELLENT';
+    else if (totalScore >= 7) rating = 'GOOD';
+    else if (totalScore >= 5) rating = 'AVERAGE';
+    else rating = 'POOR';
+
+    const submission = await this.policyAwarePrisma.submission.update({
+      where: {
+        id: submitExamDto.submission_id,
+      },
+      data: {
+        total_score: totalScore,
+        rating,
+        start_time: new Date(submitExamDto.start_time),
+        end_time: new Date(submitExamDto.end_time),
+        status: SubmissionStatus.COMPLETED,
+      },
+    });
+
+    return {
+      data: {
+        submission_id: submission.id,
       },
     };
   }
