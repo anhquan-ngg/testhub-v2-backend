@@ -72,6 +72,9 @@ model User {
   role          UserRole     @default(STUDENT)
   auth_provider String       @default("local")
   provider_id   String?
+  school        String?
+  phone         String?
+  address       String?
   exams         Exam[]
   questions     Question[]
   submissions   Submission[]

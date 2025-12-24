@@ -19,6 +19,7 @@ import {
   POLICY_AWARE_PRISMA_CLIENT,
 } from '@/prisma/prisma.module';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 
 type EnhancedPrismaClient = Omit<
   PrismaClient,
@@ -152,6 +153,135 @@ export class AuthService {
     return {
       access_token: await this.jwtService.signAsync(payload),
       data: userProfile,
+    };
+  }
+
+  async googleLogin(loginDto: GoogleLoginDto) {
+    let userProfile;
+
+    if (loginDto.code) {
+      // Exchange code for tokens
+      try {
+        const tokenResponse = await fetch(
+          'https://oauth2.googleapis.com/token',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              code: loginDto.code || '',
+              client_id: process.env.GOOGLE_CLIENT_ID || '',
+              client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+              redirect_uri:
+                process.env.GOOGLE_CALLBACK_URL ||
+                'http://localhost:3000/auth/callback',
+              grant_type: 'authorization_code',
+            }),
+          },
+        );
+
+        const tokenData = await tokenResponse.json();
+
+        if (!tokenResponse.ok) {
+          this.logger.error(
+            `Google Token Exchange failed: ${JSON.stringify(tokenData)}`,
+          );
+          throw new UnauthorizedException(
+            'Failed to exchange Google code for token.',
+          );
+        }
+
+        // Use access_token to get user info
+        const res = await fetch(
+          'https://www.googleapis.com/oauth2/v3/userinfo',
+          {
+            headers: {
+              Authorization: `Bearer ${tokenData.access_token}`,
+            },
+          },
+        );
+
+        if (!res.ok) {
+          throw new UnauthorizedException('Invalid Google access token.');
+        }
+
+        userProfile = await res.json();
+      } catch (error) {
+        this.logger.error(`Google Login via Code failed: ${error.message}`);
+        throw new UnauthorizedException('Google login failed.');
+      }
+    } else if (loginDto.accessToken) {
+      // Legacy/Mobile flow using direct access token
+      try {
+        const res = await fetch(
+          'https://www.googleapis.com/oauth2/v3/userinfo',
+          {
+            headers: {
+              Authorization: `Bearer ${loginDto.accessToken}`,
+            },
+          },
+        );
+
+        if (!res.ok) {
+          throw new UnauthorizedException('Invalid Google access token.');
+        }
+
+        userProfile = await res.json();
+      } catch (error) {
+        this.logger.error(`Google Login via Token failed: ${error.message}`);
+        throw new UnauthorizedException('Invalid Google access token.');
+      }
+    } else {
+      throw new BadRequestException(
+        'Either code or accessToken must be provided.',
+      );
+    }
+
+    const { email, sub, name, picture } = userProfile;
+
+    let user = await this.internalPrisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      // Create new user if not exists
+      user = await this.internalPrisma.user.create({
+        data: {
+          email,
+          full_name: name,
+          avatar_url: picture,
+          auth_provider: 'google',
+          provider_id: sub,
+          password: await bcrypt.hash(Math.random().toString(36).slice(-8), 10), // Random password for OAuth users
+        },
+      });
+    } else {
+      // Update existing user with Google info if not already set
+      if (user.auth_provider === 'local') {
+        user = await this.internalPrisma.user.update({
+          where: { id: user.id },
+          data: {
+            auth_provider: 'google',
+            provider_id: sub,
+            avatar_url: user.avatar_url || picture,
+          },
+        });
+      }
+    }
+
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const userInfo = {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      avatar_url: user.avatar_url,
+      role: user.role,
+    };
+
+    return {
+      access_token: await this.jwtService.signAsync(payload),
+      data: userInfo,
     };
   }
 

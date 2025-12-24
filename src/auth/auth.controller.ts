@@ -22,6 +22,7 @@ import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import type { Response } from 'express';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { GoogleLoginDto } from './dto/google-login.dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -62,6 +63,31 @@ export class AuthController {
 
     return {
       ...data,
+    };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('google-login')
+  @ApiOperation({ summary: 'Login with Google' })
+  @ApiResponse({ status: 200, description: 'Login successfully.' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  async googleLogin(
+    @Body() googleLoginDto: GoogleLoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const { access_token, data } =
+      await this.authService.googleLogin(googleLoginDto);
+
+    response.cookie('testhub_token', access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return {
+      ...data,
+      access_token, // Return access_token for client usage if needed
     };
   }
 
