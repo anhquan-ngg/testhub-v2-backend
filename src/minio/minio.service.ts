@@ -99,6 +99,18 @@ export class MinioService implements OnModuleInit {
     return { url };
   }
 
+  async getViewUrl(objectName: string): Promise<UrlDto> {
+    const url = await this.minioClient.presignedGetObject(
+      this.bucketName,
+      objectName,
+      24 * 60 * 60, // 1 day
+      {
+        'response-content-disposition': 'inline',
+      },
+    );
+    return { url };
+  }
+
   async remove(objectName: string) {
     this.minioClient.removeObject(this.bucketName, objectName);
   }

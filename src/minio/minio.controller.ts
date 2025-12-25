@@ -82,6 +82,23 @@ export class MinioController {
     return this.minioService.createDownloadUrl(objectName);
   }
 
+  @Get('/view-file')
+  @ApiOperation({ summary: 'Lấy URL để xem file (inline)' })
+  @ApiQuery({
+    name: 'objectName',
+    required: true,
+    type: String,
+    description: 'Tên object cần xem',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'URL xem file được tạo thành công (hết hạn sau 1 ngày)',
+    type: UrlDto,
+  })
+  viewFile(@Query('objectName') objectName: string): Promise<UrlDto> {
+    return this.minioService.getViewUrl(objectName);
+  }
+
   @Delete('/remove')
   @ApiOperation({ summary: 'Xóa object khỏi bucket' })
   async remove(@Query('objectName') objectName: string) {
