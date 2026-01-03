@@ -11,52 +11,81 @@ export class MinioService implements OnModuleInit {
   private readonly bucketName: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.minioClient = new Client({
-      endPoint: process.env.MINIO_ENDPOINT || 'localhost',
-      port: parseInt(process.env.MINIO_PORT || '9000', 10),
-      useSSL: false,
-      accessKey: process.env.MINIO_ROOT_USER,
-      secretKey: process.env.MINIO_ROOT_PASSWORD,
-    });
+    const s3Endpoint = this.configService.get('S3_ENDPOINT');
+    const s3Region = this.configService.get('S3_REGION');
+    const s3AccessKey = this.configService.get('S3_ACCESS_KEY');
+    const s3SecretKey = this.configService.get('S3_SECRET_KEY');
 
-    this.bucketName = this.configService.getOrThrow('MINIO_BUCKET_NAME');
+    if (s3Endpoint && s3AccessKey && s3SecretKey) {
+      // Configure for AWS S3 or S3-compatible service
+      this.minioClient = new Client({
+        endPoint: s3Endpoint,
+        region: s3Region,
+        useSSL: true,
+        accessKey: s3AccessKey,
+        secretKey: s3SecretKey,
+      });
+    } else {
+      // Configure for Local MinIO
+      this.minioClient = new Client({
+        endPoint: this.configService.get('MINIO_ENDPOINT') || 'localhost',
+        port: parseInt(this.configService.get('MINIO_PORT') || '9000', 10),
+        useSSL: false,
+        accessKey: this.configService.get('MINIO_ROOT_USER'),
+        secretKey: this.configService.get('MINIO_ROOT_PASSWORD'),
+      });
+    }
+
+    this.bucketName =
+      this.configService.get('S3_BUCKET_NAME') ||
+      this.configService.getOrThrow('MINIO_BUCKET_NAME');
   }
 
   async onModuleInit() {
-    const exists = await this.minioClient.bucketExists(this.bucketName);
-    if (!exists) {
-      await this.minioClient.makeBucket(this.bucketName);
-      await this.minioClient.setBucketPolicy(
-        this.bucketName,
-        JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [
-            {
-              Effect: 'Allow',
-              Principal: {
-                AWS: ['*'],
-              },
-              Action: ['s3:ListBucket'],
-              Resource: [`arn:aws:s3:::${this.bucketName}`],
-              Condition: {
-                StringEquals: {
-                  's3:prefix': ['media', 'public'],
+    const isLocal = !this.configService.get('S3_ENDPOINT');
+
+    try {
+      const exists = await this.minioClient.bucketExists(this.bucketName);
+      if (!exists && isLocal) {
+        // Only attempt to create bucket and set policy automatically on local MinIO
+        await this.minioClient.makeBucket(this.bucketName);
+        await this.minioClient.setBucketPolicy(
+          this.bucketName,
+          JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Principal: {
+                  AWS: ['*'],
+                },
+                Action: ['s3:ListBucket'],
+                Resource: [`arn:aws:s3:::${this.bucketName}`],
+                Condition: {
+                  StringEquals: {
+                    's3:prefix': ['media', 'public'],
+                  },
                 },
               },
-            },
-            {
-              Effect: 'Allow',
-              Principal: {
-                AWS: ['*'],
+              {
+                Effect: 'Allow',
+                Principal: {
+                  AWS: ['*'],
+                },
+                Action: ['s3:GetObject'],
+                Resource: [
+                  `arn:aws:s3:::${this.bucketName}/media*`,
+                  `arn:aws:s3:::${this.bucketName}/public*`,
+                ],
               },
-              Action: ['s3:GetObject'],
-              Resource: [
-                `arn:aws:s3:::${this.bucketName}/media*`,
-                `arn:aws:s3:::${this.bucketName}/public*`,
-              ],
-            },
-          ],
-        }),
+            ],
+          }),
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `MinioService: Could not verify/create bucket "${this.bucketName}". This is expected in production if permissions are restricted.`,
+        error.message,
       );
     }
   }
