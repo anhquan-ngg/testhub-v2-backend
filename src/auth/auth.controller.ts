@@ -56,9 +56,10 @@ export class AuthController {
 
     response.cookie('testhub_token', access_token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // Chỉ gửi cookie qua HTTPS trong môi trường production
-      sameSite: 'lax', // Giúp ngăn chặn CSRF
-      maxAge: 7 * 24 * 60 * 60 * 1000, // Cookie có hiệu lực trong 7 ngày
+      path: '/',
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     return {
@@ -80,8 +81,9 @@ export class AuthController {
 
     response.cookie('testhub_token', access_token, {
       httpOnly: true,
+      path: '/',
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -98,6 +100,7 @@ export class AuthController {
   logout(@Res({ passthrough: true }) response: Response) {
     response.clearCookie('testhub_token', {
       httpOnly: true,
+      path: '/',
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     });
