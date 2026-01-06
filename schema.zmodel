@@ -6,12 +6,12 @@ datasource db {
 generator client {
     provider = "prisma-client-js"
     binaryTargets = ["native", "debian-openssl-3.0.x"]
-    output = "../generated/prisma-client"
+    output = "./generated/prisma-client"
 }
 
 plugin trpc {
     provider = "@zenstackhq/trpc"
-    output   = "../generated/trpc"
+    output   = "./generated/trpc"
 }
 
 /// Enum for users.role

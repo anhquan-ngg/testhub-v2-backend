@@ -47,19 +47,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma Client
-        run: npx prisma generate
-
-      - name: Generate ZenStack
-        run: npx zenstack generate
-
       - name: Build application
+        run: npm run build
+
+      - name: Prune devDependencies
+        run: npm prune --production
+
+      - name: Generate Runtime Code
         run: |
-          npm run build
-          # Copy generated files into dist to fix relative paths on server
+          npx prisma generate
+          npx zenstack generate
+          # Copy generated files into dist for runtime imports
           cp -r generated dist/
-          # Install production dependencies on runner to ship to EC2
-          npm ci --production --no-scripts
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -110,9 +109,10 @@ jobs:
           ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} "mkdir -p ~/testhub-v2-backend"
 
           # Use rsync to upload EVERYTHING including node_modules
-          # Use delete flag to remove old files and keep server clean
+          # Use delete flag to remove old files, but EXCLUDE THE .ENV FILE!
           rsync -avz --delete -e "ssh -i ~/.ssh/ec2_key.pem" \
             --exclude='.git' \
+            --exclude='.env' \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
 
       - name: Restart PM2
