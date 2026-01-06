@@ -12,7 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { ENHANCED_PRISMA } from '@zenstackhq/server/nestjs';
 import * as bcrypt from 'bcrypt';
 import { SignupDto } from './dto/signup.dto';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../generated/prisma-client';
 import { PrismaService } from '@/prisma/prisma.service';
 import {
   INTERNAL_PRISMA_CLIENT,

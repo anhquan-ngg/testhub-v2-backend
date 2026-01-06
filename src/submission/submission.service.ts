@@ -9,7 +9,11 @@ import {
   INTERNAL_PRISMA_CLIENT,
   POLICY_AWARE_PRISMA_CLIENT,
 } from '@/prisma/prisma.module';
-import { PrismaClient, Rating, SubmissionStatus } from '@prisma/client';
+import {
+  PrismaClient,
+  Rating,
+  SubmissionStatus,
+} from '../../generated/prisma-client';
 import { SubmitQuestionDto } from './dto/submit-question.dto';
 import { SubmitExamDto } from './dto/submit-exam.dto';
 

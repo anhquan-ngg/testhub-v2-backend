@@ -1,6 +1,6 @@
 import { Global, Module, Provider, Scope } from '@nestjs/common';
 import { APP_INTERCEPTOR, REQUEST } from '@nestjs/core';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../generated/prisma-client';
 import { enhance } from '@zenstackhq/runtime';
 import { Request } from 'express';
 import { ZenStackModule } from '@zenstackhq/server/nestjs';
