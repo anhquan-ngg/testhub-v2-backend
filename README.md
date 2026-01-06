@@ -1,98 +1,123 @@
+# TestHub V2 - Backend System
+
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <a href="https://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## 📝 Giới thiệu về hệ thống
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+**TestHub V2** là một nền tảng quản lý và thực hiện các bài thi trực tuyến mạnh mẽ, được thiết kế để phục vụ nhu cầu kiểm tra đánh giá của giảng viên và sinh viên. Hệ thống cung cấp giải pháp toàn diện từ khâu ngân hàng câu hỏi, tạo đề thi thông minh cho đến chấm điểm và thống kê kết quả tự động.
 
-## Description
+Mục tiêu của TestHub là mang lại trải nghiệm thi cử công bằng, minh bạch và hiệu quả nhất thông qua các công nghệ xử lý hiện đại và kiến trúc hệ thống tối ưu.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+---
 
-## Project setup
+## 🚀 Công nghệ sử dụng
+
+Hệ thống được xây dựng dựa trên các công nghệ hiện đại, đảm bảo tính bảo mật, hiệu suất cao và khả năng mở rộng:
+
+### ⚙️ Backend Core
+
+- **Framework**: [NestJS](https://nestjs.com/) (Node.js framework tiến bộ) - Cung cấp kiến trúc module và khả năng bảo trì tốt.
+- **Language**: TypeScript - Đảm bảo an toàn kiểu dữ liệu (Type-safe).
+- **Architecture**: REST API tích hợp tRPC cho các tác vụ cần tốc độ cao.
+
+### 🔐 Security & Authorization
+
+- **ZenStack**: Lớp bảo mật dựa trên Model, giúp quản lý phân quyền (Access Control Policy) ngay từ tầng Schema.
+- **Passport.js & JWT**: Cơ chế xác thực mạnh mẽ, hỗ trợ đăng nhập qua Google OAuth.
+- **Auth Provider**: Hỗ trợ Login truyền thống và Google Login.
+
+### 💾 Database & Storage
+
+- **ORM**: [Prisma](https://www.prisma.io/) - Truy vấn dữ liệu mạnh mẽ và đồng bộ schema.
+- **Database**: PostgreSQL (Chạy trên **AWS RDS** cho môi trường Production).
+- **File Storage**:
+  - **AWS S3**: Lưu trữ tài nguyên (ảnh câu hỏi, avatar) trên môi trường Production.
+  - **MinIO**: Giải pháp lưu trữ tương thích S3 chạy local để phục vụ quá trình phát triển (Dev).
+
+### 🌐 Infrastructure & DevOps
+
+- **Hosting**: AWS EC2 Instances.
+- **Reverse Proxy**: Nginx (Cấu hình SSL Let's Encrypt).
+- **Process Manager**: PM2 - Đảm bảo ứng dụng chạy 24/7 và tự động restart.
+- **CI/CD**: **GitHub Actions** - Tự động hóa quy trình Kiểm thử (Test), Xây dựng (Build) và Triển khai (Deploy) mỗi khi có code mới lên nhánh `master`.
+
+---
+
+## ✨ Các tính năng chính
+
+- [x] **Quản lý người dùng**: Phân quyền Giảng viên (Lecturer), Sinh viên (Student) và Admin.
+- [x] **Ngân hàng câu hỏi**: Hỗ trợ nhiều loại câu hỏi (Trắc nghiệm, Chọn nhiều đáp án, Tự luận).
+- [x] **Tạo đề thi**: Hỗ trợ tạo đề thủ công (Manual) hoặc tự động lựa chọn câu hỏi theo tỉ lệ (Random).
+- [x] **Thực hiện bài thi**: Ghi lại quá trình làm bài, tính toán thời gian thực.
+- [x] **Chấm điểm tự động**: Trả kết quả ngay lập tức cho các câu hỏi trắc nghiệm.
+- [x] **Thống kê & Đánh giá**: Xếp loại kết quả làm bài của sinh viên.
+
+---
+
+## 🛠 Cài đặt & Chạy ứng dụng
+
+### Yêu cầu hệ thống
+
+- Node.js (v20+)
+- PostgreSQL hoặc Docker để chạy cơ sở dữ liệu.
+
+### Các bước cài đặt
+
+1. **Clone repository**:
 
 ```bash
-$ npm install
+git clone https://github.com/anhquan-ngg/testhub-v2-backend.git
+cd testhub-v2-backend
 ```
 
-## Compile and run the project
+2. **Cài đặt thư viện**:
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
 ```
 
-## Run tests
+3. **Cấu hình biến môi trường**:
+   Tạo file `.env` từ file mẫu và điền các thông tin (DATABASE_URL, JWT_SECRET, AWS_S3_KEYS...):
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+cp .env.example .env
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+4. **Khởi tạo Database & Schema**:
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npx zenstack generate
+npx prisma db push
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+5. **Chạy ứng dụng**:
 
-## Resources
+```bash
+# Chế độ phát triển
+npm run start:dev
 
-Check out a few resources that may come in handy when working with NestJS:
+# Chế độ Production
+npm run build
+npm run start:prod
+```
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+---
 
-## Support
+## 📖 API Documentation
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Hệ thống tích hợp sẵn Swagger UI để việc tích hợp Frontend trở nên dễ dàng:
 
-## Stay in touch
+- **Local**: `http://localhost:3001/api-docs`
+- **Production**: `https://api.testhub.quanna.io.vn/api-docs`
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+---
 
-## License
+## 📝 License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Distributed under the UNLICENSED License. See `LICENSE` for more information.
+
+---
+
+**Author**: [Anh Quân](https://github.com/anhquan-ngg)
