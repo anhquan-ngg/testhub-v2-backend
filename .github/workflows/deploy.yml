@@ -86,10 +86,18 @@ jobs:
 
       - name: Setup SSH Key
         run: |
+          if [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "Error: EC2_SSH_KEY is empty"
+            exit 1
+          fi
+          if [ -z "${{ secrets.EC2_HOST }}" ]; then
+            echo "Error: EC2_HOST is empty"
+            exit 1
+          fi
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
           chmod 600 ~/.ssh/ec2_key.pem
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts || echo "Warning: ssh-keyscan failed, but continuing..."
 
       - name: Deploy to EC2
         run: |
