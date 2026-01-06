@@ -56,7 +56,10 @@ jobs:
       - name: Build application
         run: |
           npm run build
+          # Copy generated files into dist to fix relative paths on server
           cp -r generated dist/
+          # Install production dependencies on runner to ship to EC2
+          npm ci --production --no-scripts
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -64,6 +67,7 @@ jobs:
           name: deployment-package
           path: |
             dist/
+            node_modules/
             package.json
             package-lock.json
             prisma/
@@ -105,22 +109,18 @@ jobs:
           # Create directory if not exists
           ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} "mkdir -p ~/testhub-v2-backend"
 
-          # Upload all necessary files (including the pre-generated ones)
-          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
-            --exclude='node_modules' \
+          # Use rsync to upload EVERYTHING including node_modules
+          # Use delete flag to remove old files and keep server clean
+          rsync -avz --delete -e "ssh -i ~/.ssh/ec2_key.pem" \
             --exclude='.git' \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
 
-      - name: Install dependencies and restart PM2
+      - name: Restart PM2
         run: |
           ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
             cd ~/testhub-v2-backend
             
-            # Install production dependencies only
-            # No generation needed here anymore!
-            npm ci --production --no-scripts
-            
-            # Run database migrations
+            # Run database migrations (very lightweight)
             npx prisma migrate deploy
             
             # Restart PM2 process
