@@ -1,0 +1,144 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run tests
+        run: npm run test
+
+  build:
+    name: Build Application
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Generate ZenStack
+        run: npx zenstack generate
+
+      - name: Build application
+        run: npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  deploy:
+    name: Deploy to EC2
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+          chmod 600 ~/.ssh/ec2_key.pem
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        run: |
+          # Upload dist folder
+          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            dist/ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/dist/
+
+          # Upload package files for production dependencies
+          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
+            package.json package-lock.json \
+            ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
+
+          # Upload Prisma schema
+          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
+            prisma/ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/prisma/
+
+          # Upload ZenStack schema
+          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
+            schema.zmodel ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
+
+      - name: Install dependencies and restart PM2
+        run: |
+          ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+            cd ~/testhub-v2-backend
+            
+            # Install production dependencies only
+            npm ci --production
+            
+            # Generate Prisma Client
+            npx prisma generate
+            
+            # Run database migrations
+            npx prisma migrate deploy
+            
+            # Restart PM2 process
+            pm2 restart testhub-api || pm2 start dist/src/main.js --name testhub-api
+            
+            # Save PM2 configuration
+            pm2 save
+            
+            # Show status
+            pm2 list
+          EOF
+
+      - name: Verify Deployment
+        run: |
+          ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
+            # Wait for application to start
+            sleep 5
+            
+            # Check PM2 status
+            pm2 status testhub-api
+            
+            # Show recent logs
+            pm2 logs testhub-api --lines 20 --nostream
+          EOF
