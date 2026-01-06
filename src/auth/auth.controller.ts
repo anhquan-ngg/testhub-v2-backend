@@ -59,6 +59,8 @@ export class AuthController {
       path: '/',
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      domain:
+        process.env.NODE_ENV === 'production' ? '.quanna.io.vn' : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -84,6 +86,8 @@ export class AuthController {
       path: '/',
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      domain:
+        process.env.NODE_ENV === 'production' ? '.quanna.io.vn' : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -103,6 +107,8 @@ export class AuthController {
       path: '/',
       secure: process.env.NODE_ENV === 'production',
       sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      domain:
+        process.env.NODE_ENV === 'production' ? '.quanna.io.vn' : undefined,
     });
 
     return { message: 'Logout successful' };
