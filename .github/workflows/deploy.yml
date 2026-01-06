@@ -59,8 +59,14 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: deployment-package
+          path: |
+            dist/
+            generated/
+            package.json
+            package-lock.json
+            prisma/
+            schema.zmodel
           retention-days: 1
 
   deploy:
@@ -75,8 +81,8 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: deployment-package
+          path: .
 
       - name: Setup SSH Key
         run: |
@@ -87,24 +93,14 @@ jobs:
 
       - name: Deploy to EC2
         run: |
-          # Upload dist folder
+          # Create directory if not exists
+          ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} "mkdir -p ~/testhub-v2-backend"
+
+          # Upload all necessary files (including the pre-generated ones)
           rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
             --exclude='node_modules' \
             --exclude='.git' \
-            dist/ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/dist/
-
-          # Upload package files for production dependencies
-          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
-            package.json package-lock.json \
-            ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
-
-          # Upload Prisma schema
-          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
-            prisma/ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/prisma/
-
-          # Upload ZenStack schema
-          rsync -avz -e "ssh -i ~/.ssh/ec2_key.pem" \
-            schema.zmodel ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
+            ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
 
       - name: Install dependencies and restart PM2
         run: |
@@ -112,13 +108,8 @@ jobs:
             cd ~/testhub-v2-backend
             
             # Install production dependencies only
-            npm ci --production
-            
-            # Generate ZenStack
-            npx zenstack generate
-            
-            # Generate Prisma Client
-            npx prisma generate
+            # No generation needed here anymore!
+            npm ci --production --no-scripts
             
             # Run database migrations
             npx prisma migrate deploy
