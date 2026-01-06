@@ -47,18 +47,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build application
-        run: npm run build
-
-      - name: Prune devDependencies
-        run: npm prune --production
-
       - name: Generate Runtime Code
         run: |
           npx prisma generate
           npx zenstack generate
+
+      - name: Build application
+        run: |
+          npm run build
           # Copy generated files into dist for runtime imports
           cp -r generated dist/
+
+      - name: Prune devDependencies
+        run: npm prune --production
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
