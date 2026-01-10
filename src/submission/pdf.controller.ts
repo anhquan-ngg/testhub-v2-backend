@@ -31,6 +31,10 @@ export class PdfController {
   ) {
     const user = (req as any).user;
 
+    if (!user) {
+      throw new ForbiddenException('User not authenticated');
+    }
+
     // Check permissions: ADMIN, LECTURER, or Owner (Student)
     if (user.role !== 'ADMIN' && user.role !== 'LECTURER') {
       const ownerId = await this.submissionService.getSubmissionOwner(id);

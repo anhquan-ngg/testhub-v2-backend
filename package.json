@@ -12,6 +12,7 @@
     "dev": "npm run prestart:dev && nest start --watch",
     "start:dev": "nest start --watch",
     "prestart:dev": "node scripts/copy-assets.js",
+    "postinstall": "zenstack generate",
     "postbuild": "node scripts/copy-assets.js",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
