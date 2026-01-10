@@ -10,8 +10,8 @@ datasource db {
 
 generator client {
   provider      = "prisma-client-js"
-  binaryTargets = ["native", "debian-openssl-3.0.x"]
-  output        = "./generated/prisma-client"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+  output        = "../generated/prisma-client"
 }
 
 /// Enum for users.role
@@ -23,9 +23,14 @@ enum UserRole {
 
 /// Enum for exams.status
 enum ExamStatus {
-  PENDING
   ACTIVE
   INACTIVE
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 /// Enum for questions.question_type
@@ -64,15 +69,15 @@ enum SubmissionStatus {
 }
 
 model User {
-  id            String       @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
-  created_at    DateTime     @default(now())
-  updated_at    DateTime     @updatedAt()
+  id            String             @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
+  created_at    DateTime           @default(now())
+  updated_at    DateTime           @updatedAt()
   full_name     String
-  email         String       @unique()
+  email         String             @unique()
   password      String
   avatar_url    String?
-  role          UserRole     @default(STUDENT)
-  auth_provider String       @default("local")
+  role          UserRole           @default(STUDENT)
+  auth_provider String             @default("local")
   provider_id   String?
   school        String?
   phone         String?
@@ -80,28 +85,31 @@ model User {
   exams         Exam[]
   questions     Question[]
   submissions   Submission[]
+  registrations ExamRegistration[]
 
   @@map("users")
 }
 
 model Exam {
-  id              String          @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @updatedAt()
-  lecturer_id     String          @db.Uuid()
+  id              String             @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
+  created_at      DateTime           @default(now())
+  updated_at      DateTime           @updatedAt()
+  lecturer_id     String             @db.Uuid()
   topic           String
   title           String
   exam_start_time DateTime
   exam_end_time   DateTime
   duration        Int
-  practice        Boolean         @default(false)
-  mode            SelectionMode   @default(MANUAL)
+  practice        Boolean            @default(false)
+  mode            SelectionMode      @default(MANUAL)
   sample_size     Int?
   distribution    String?
-  status          ExamStatus      @default(PENDING)
+  is_public       Boolean            @default(false)
+  status          ExamStatus         @default(ACTIVE)
   submissions     Submission[]
   questions       ExamQuestions[]
-  lecturer        User            @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
+  registrations   ExamRegistration[]
+  lecturer        User               @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
 
   @@map("exams")
 }
@@ -171,4 +179,18 @@ model SubmissionQuestions {
 
   @@unique([submission_id, question_id])
   @@map("submission_questions")
+}
+
+model ExamRegistration {
+  id         String             @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
+  created_at DateTime           @default(now())
+  updated_at DateTime           @updatedAt()
+  exam_id    String             @db.Uuid()
+  student_id String             @db.Uuid()
+  status     RegistrationStatus @default(PENDING)
+  exam       Exam               @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+  student    User               @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([exam_id, student_id])
+  @@map("exam_registrations")
 }

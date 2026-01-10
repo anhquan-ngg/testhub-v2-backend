@@ -9,7 +9,10 @@
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
+    "dev": "npm run prestart:dev && nest start --watch",
     "start:dev": "nest start --watch",
+    "prestart:dev": "node scripts/copy-assets.js",
+    "postbuild": "node scripts/copy-assets.js",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
@@ -40,12 +43,13 @@
     "minio": "^8.0.6",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "prisma": "6.16.x",
+    "puppeteer": "^24.34.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "swagger": "^0.7.5",
-    "zod": "^3.23.8",
-    "prisma": "6.16.x",
-    "zenstack": "^2.21.1"
+    "zenstack": "^2.21.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

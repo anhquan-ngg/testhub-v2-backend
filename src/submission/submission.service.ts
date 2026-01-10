@@ -288,4 +288,15 @@ export class SubmissionService {
       },
     };
   }
+  async getSubmissionOwner(submissionId: string) {
+    const submission = await this.internalPrisma.submission.findUnique({
+      where: {
+        id: submissionId,
+      },
+      select: {
+        student_id: true,
+      },
+    });
+    return submission?.student_id;
+  }
 }

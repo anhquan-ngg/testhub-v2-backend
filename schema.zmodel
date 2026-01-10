@@ -5,8 +5,8 @@ datasource db {
 
 generator client {
     provider = "prisma-client-js"
-    binaryTargets = ["native", "debian-openssl-3.0.x"]
-    output = "./generated/prisma-client"
+    binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+    output = "../generated/prisma-client"
 }
 
 plugin trpc {
@@ -23,9 +23,14 @@ enum UserRole {
 
 /// Enum for exams.status
 enum ExamStatus {
-    PENDING
     ACTIVE
     INACTIVE
+}
+
+enum RegistrationStatus {
+    PENDING
+    APPROVED
+    REJECTED
 }
 
 /// Enum for questions.question_type
@@ -87,6 +92,7 @@ model User extends Base {
     exams Exam[]
     questions Question[]
     submissions Submission[]
+    registrations ExamRegistration[]
 
     // map tables
     @@map("users")
@@ -115,10 +121,13 @@ model Exam extends Base {
     mode SelectionMode @default(MANUAL)
     sample_size Int?
     distribution String?
-    status ExamStatus @default(PENDING)
+    is_public Boolean @default(false)
+    status ExamStatus @default(ACTIVE)
+    
 
     submissions Submission[]
     questions ExamQuestions[]
+    registrations ExamRegistration[]
 
     // relation fields
     lecturer User @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
@@ -135,7 +144,7 @@ model Exam extends Base {
     // @@deny('update', submissions?[true])
 
     // temp rules
-    @@allow('read', true)
+    @@allow('read', status == 'ACTIVE' || auth().role == 'ADMIN' || (auth().role == 'LECTURER' && lecturer == auth()))
     @@allow('create', true)
     @@allow('update', true)
     @@allow('delete', true)
@@ -232,6 +241,24 @@ model SubmissionQuestions extends Base {
     @@allow('read, update, delete', auth().role == 'ADMIN')
     @@allow('read, create, update', auth().role == 'STUDENT' && submission.student == auth())
     @@allow('read', auth().role == 'LECTURER' && submission.exam.lecturer == auth())
+}
+
+model ExamRegistration extends Base {
+    exam_id String @db.Uuid
+    student_id String @db.Uuid
+    status RegistrationStatus @default(PENDING)
+
+    exam Exam @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+    student User @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+    @@unique([exam_id, student_id])
+    @@map("exam_registrations")
+
+    @@allow('all', auth().role == 'ADMIN')
+    @@allow('create', auth().role == 'STUDENT' && student == auth())
+    @@allow('read', auth().role == 'ADMIN' || (auth().role == 'LECTURER' && exam.lecturer == auth()) || (auth().role == 'STUDENT' && student == auth()))
+    @@allow('update', (auth().role == 'LECTURER' && exam.lecturer == auth()) || auth().role == 'ADMIN')
+    @@allow('delete', (auth().role == 'LECTURER' && exam.lecturer == auth()) || auth().role == 'ADMIN')
 }
 
 /*

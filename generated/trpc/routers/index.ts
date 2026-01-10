@@ -5,13 +5,14 @@
 /* eslint-disable */
 
 import type { unsetMarker, AnyRouter, AnyRootConfig, CreateRouterInner, Procedure, ProcedureBuilder, ProcedureParams, ProcedureRouterRecord, ProcedureType } from "@trpc/server";
-import type { PrismaClient } from "../../../prisma/generated/prisma-client";
+import type { PrismaClient } from "../../prisma-client";
 import createUserRouter from "./User.router";
 import createExamRouter from "./Exam.router";
 import createSubmissionRouter from "./Submission.router";
 import createQuestionRouter from "./Question.router";
 import createExamQuestionsRouter from "./ExamQuestions.router";
 import createSubmissionQuestionsRouter from "./SubmissionQuestions.router";
+import createExamRegistrationRouter from "./ExamRegistration.router";
 
 export type BaseConfig = AnyRootConfig;
 
@@ -42,6 +43,7 @@ export function createRouter<Config extends BaseConfig>(router: RouterFactory<Co
         question: createQuestionRouter(router, procedure),
         examQuestions: createExamQuestionsRouter(router, procedure),
         submissionQuestions: createSubmissionQuestionsRouter(router, procedure),
+        examRegistration: createExamRegistrationRouter(router, procedure),
     }
     );
 }

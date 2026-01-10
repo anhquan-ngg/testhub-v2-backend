@@ -150,6 +150,7 @@ exports.Prisma.ExamScalarFieldEnum = {
   mode: 'mode',
   sample_size: 'sample_size',
   distribution: 'distribution',
+  is_public: 'is_public',
   status: 'status'
 };
 
@@ -200,6 +201,15 @@ exports.Prisma.SubmissionQuestionsScalarFieldEnum = {
   is_correct: 'is_correct'
 };
 
+exports.Prisma.ExamRegistrationScalarFieldEnum = {
+  id: 'id',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  exam_id: 'exam_id',
+  student_id: 'student_id',
+  status: 'status'
+};
+
 exports.Prisma.SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -227,7 +237,6 @@ exports.SelectionMode = exports.$Enums.SelectionMode = {
 };
 
 exports.ExamStatus = exports.$Enums.ExamStatus = {
-  PENDING: 'PENDING',
   ACTIVE: 'ACTIVE',
   INACTIVE: 'INACTIVE'
 };
@@ -258,13 +267,20 @@ exports.QuestionFormat = exports.$Enums.QuestionFormat = {
   ADVANCED: 'ADVANCED'
 };
 
+exports.RegistrationStatus = exports.$Enums.RegistrationStatus = {
+  PENDING: 'PENDING',
+  APPROVED: 'APPROVED',
+  REJECTED: 'REJECTED'
+};
+
 exports.Prisma.ModelName = {
   User: 'User',
   Exam: 'Exam',
   Submission: 'Submission',
   Question: 'Question',
   ExamQuestions: 'ExamQuestions',
-  SubmissionQuestions: 'SubmissionQuestions'
+  SubmissionQuestions: 'SubmissionQuestions',
+  ExamRegistration: 'ExamRegistration'
 };
 
 /**
