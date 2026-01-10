@@ -14,6 +14,12 @@ plugin trpc {
     output   = "./generated/trpc"
 }
 
+plugin zod {
+    provider = '@core/zod'
+    output = "./generated/zod"
+    prismaClientPath = "../../prisma-client"
+}
+
 /// Enum for users.role
 enum UserRole {
     ADMIN 
