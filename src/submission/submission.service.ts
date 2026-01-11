@@ -91,7 +91,6 @@ export class SubmissionService {
       if (examData.distribution) {
         const parsedDistribution = JSON.parse(examData.distribution);
         for (const distribution of parsedDistribution) {
-          console.log(distribution);
           const questionsData = await this.internalPrisma.$queryRaw<
             Array<{
               id: number;

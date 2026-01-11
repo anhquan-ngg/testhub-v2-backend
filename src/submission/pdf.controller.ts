@@ -82,4 +82,24 @@ export class PdfController {
 
     res.send(pdfBuffer);
   }
+
+  @Get('exam/:examId/pdf')
+  async downloadExamPdf(
+    @Param('examId') examId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const user = (req as any).user;
+
+    // Anyone with authenticated access to this route can download the blank exam (assuming they reached the exam page)
+    const pdfBuffer = await this.pdfService.generateBlankExamPdf(examId);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="Dethi_${examId}.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+
+    res.send(pdfBuffer);
+  }
 }

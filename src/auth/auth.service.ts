@@ -110,7 +110,6 @@ export class AuthService {
           password: signupDto.password,
         },
       });
-      console.log('User: ', user);
     } catch (error) {
       console.error('Signup unsuccessfully');
     }
@@ -149,7 +148,6 @@ export class AuthService {
       role: user.role,
     };
 
-    console.log('User login: ', user);
     return {
       access_token: await this.jwtService.signAsync(payload),
       data: userProfile,

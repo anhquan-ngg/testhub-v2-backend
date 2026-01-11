@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  Inject,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { INTERNAL_PRISMA_CLIENT } from '@/prisma/prisma.module';
 import { PrismaClient } from '../../generated/prisma-client';
 import * as puppeteer from 'puppeteer';
@@ -9,11 +14,19 @@ type EnhancedPrismaClient = Omit<
 >;
 
 @Injectable()
-export class ExamReportService {
+export class ExamReportService implements OnModuleDestroy {
+  private browser: puppeteer.Browser | null = null;
+
   constructor(
     @Inject(INTERNAL_PRISMA_CLIENT)
     private readonly prisma: EnhancedPrismaClient,
   ) {}
+
+  async onModuleDestroy() {
+    if (this.browser) {
+      await this.browser.close();
+    }
+  }
 
   async generateExamReportPdf(examId: string): Promise<Buffer> {
     const exam = await this.prisma.exam.findUnique({
@@ -120,11 +133,21 @@ export class ExamReportService {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Báo cáo bài thi - ${exam.title}</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: white; color: #111827; }
-        @page { size: A4 landscape; margin: 1cm; }
-        table { page-break-inside: avoid; }
-        tr { page-break-inside: avoid; }
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; 
+            background-color: white; 
+            color: #1f2937;
+            padding: 2cm;
+        }
+        @page { size: A4 landscape; margin: 0; }
+        table { page-break-inside: auto; border-spacing: 0; border-collapse: collapse; width: 100%; }
+        tr { page-break-inside: avoid; page-break-after: auto; }
+        thead { display: table-header-group; }
+        th { background-color: #f9fafb; color: #374151; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
     </style>
 </head>
 <body class="p-8">
@@ -181,11 +204,14 @@ export class ExamReportService {
 </html>
     `;
 
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-    const page = await browser.newPage();
+    if (!this.browser || !this.browser.connected) {
+      this.browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      });
+    }
+
+    const page = await this.browser.newPage();
 
     await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 500));
@@ -197,7 +223,7 @@ export class ExamReportService {
       margin: { top: '1cm', right: '1cm', bottom: '1cm', left: '1cm' },
     });
 
-    await browser.close();
+    await page.close();
 
     return Buffer.from(pdfBuffer);
   }

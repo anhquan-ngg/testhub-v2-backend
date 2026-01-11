@@ -1,0 +1,13 @@
+CREATE OR REPLACE FUNCTION public.update_exam_status()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+    NEW.status := CASE
+        WHEN NEW.exam_start_time <= NOW() AND NOW() <= NEW.exam_end_time THEN 'ACTIVE'::"ExamStatus"
+        WHEN NOW() < NEW.exam_start_time THEN 'PENDING'::"ExamStatus"
+        ELSE 'INACTIVE'::"ExamStatus"
+    END;
+    RETURN NEW;
+END;
+$function$

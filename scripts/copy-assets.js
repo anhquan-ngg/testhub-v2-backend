@@ -5,10 +5,20 @@ function copyFolderSync(from, to) {
   if (!fs.existsSync(from)) return;
   fs.mkdirSync(to, { recursive: true });
   fs.readdirSync(from).forEach((element) => {
-    if (fs.lstatSync(path.join(from, element)).isFile()) {
-      fs.copyFileSync(path.join(from, element), path.join(to, element));
+    const fromPath = path.join(from, element);
+    const toPath = path.join(to, element);
+    if (fs.lstatSync(fromPath).isFile()) {
+      try {
+        fs.copyFileSync(fromPath, toPath);
+      } catch (err) {
+        if (err.code === 'EBUSY') {
+          console.warn(`⚠️ Warning: Skipping locked file: ${element}`);
+        } else {
+          throw err;
+        }
+      }
     } else {
-      copyFolderSync(path.join(from, element), path.join(to, element));
+      copyFolderSync(fromPath, toPath);
     }
   });
 }
