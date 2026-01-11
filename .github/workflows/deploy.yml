@@ -74,7 +74,6 @@ jobs:
           name: deployment-package
           path: |
             dist/
-            node_modules/
             package.json
             package-lock.json
             prisma/
@@ -121,12 +120,23 @@ jobs:
           rsync -avz --delete -e "ssh -i ~/.ssh/ec2_key.pem" \
             --exclude='.git' \
             --exclude='.env' \
+            --exclude='node_modules' \
             ./ ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:~/testhub-v2-backend/
 
       - name: Restart PM2
         run: |
           ssh -i ~/.ssh/ec2_key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
             cd ~/testhub-v2-backend
+            
+            # Install dependencies
+            echo "Installing dependencies..."
+            npm install || npm ci
+
+            # Generate ZenStack/Prisma code with memory limit
+            echo "Generating Zenstack code..."
+            export NODE_OPTIONS="--max-old-space-size=4096"
+            npx prisma generate
+            npx zenstack generate
             
             # Run database migrations (very lightweight)
             npx prisma migrate deploy
