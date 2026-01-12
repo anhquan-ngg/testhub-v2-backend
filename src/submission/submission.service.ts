@@ -83,6 +83,7 @@ export class SubmissionService {
       questions = await this.internalPrisma.$queryRaw`
         SELECT id, question_text, image_url, options, question_type
         FROM "questions"
+        WHERE topic = ${examData.topic}
         ORDER BY RANDOM()
         LIMIT ${examData.sample_size}
       `;
@@ -102,7 +103,8 @@ export class SubmissionService {
           >`
             SELECT id, question_text, image_url, options, question_type
             FROM "questions"
-            WHERE question_type::text = ${distribution.question_type} 
+            WHERE topic = ${examData.topic}
+              AND question_type::text = ${distribution.question_type} 
               AND question_format::text = ${distribution.question_format}
             ORDER BY RANDOM()
             LIMIT ${distribution.quantity}
@@ -172,13 +174,18 @@ export class SubmissionService {
         throw new BadRequestException('Options is required');
       }
 
+      // Options of question
       const parsedQuestionOptions = JSON.parse(question.options);
 
+      // Correct answers
       const correctAnswers = parsedQuestionOptions.filter(
         (opt: { text: string; isCorrect?: boolean }) => opt.isCorrect !== false,
       );
 
+      // User selected answers
       const parsedUserOptions = JSON.parse(submitQuestionDto.options);
+
+      // User selected texts
       const userSelectedTexts = new Set(
         parsedUserOptions
           .filter((opt: { isCorrect: boolean }) => opt.isCorrect)
@@ -186,9 +193,15 @@ export class SubmissionService {
       );
 
       let correctMatches = 0;
-      correctAnswers.forEach((correctOpt) => {
-        if (userSelectedTexts.has(correctOpt.text)) {
+
+      // Count correct matches
+      userSelectedTexts.forEach((userOpt) => {
+        if (
+          correctAnswers.find((opt: { text: string }) => opt.text === userOpt)
+        ) {
           correctMatches++;
+        } else {
+          correctMatches--;
         }
       });
 

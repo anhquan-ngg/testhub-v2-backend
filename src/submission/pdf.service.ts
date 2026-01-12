@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { INTERNAL_PRISMA_CLIENT } from '@/prisma/prisma.module';
 import { PrismaClient } from '../../generated/prisma-client';
 import * as puppeteer from 'puppeteer';
+import { MinioService } from '@/minio/minio.service';
 
 type EnhancedPrismaClient = Omit<
   PrismaClient,
@@ -13,6 +14,7 @@ export class PdfService {
   constructor(
     @Inject(INTERNAL_PRISMA_CLIENT)
     private readonly prisma: EnhancedPrismaClient,
+    private readonly minioService: MinioService,
   ) {}
 
   async generateSubmissionPdf(submissionId: string): Promise<Buffer> {
@@ -31,7 +33,16 @@ export class PdfService {
         student: true,
         questions: {
           include: {
-            question: true,
+            question: {
+              select: {
+                id: true,
+                question_text: true,
+                question_type: true,
+                options: true,
+                correct_answer: true,
+                image_url: true,
+              },
+            },
           },
         },
       },
@@ -170,19 +181,45 @@ export class PdfService {
         <!-- Questions -->
         <div class="space-y-6">
             <h2 class="text-2xl font-bold text-gray-900 border-b-2 border-blue-600 pb-2">Chi tiết câu trả lời</h2>
-            ${submission.questions
-              .map((sq: any, index: number) => {
-                const options = sq.question.options
-                  ? JSON.parse(sq.question.options)
-                  : [];
-                const studentAnswers = sq.options ? JSON.parse(sq.options) : [];
+            ${(
+              await Promise.all(
+                submission.questions.map(async (sq: any, index: number) => {
+                  const options = sq.question.options
+                    ? JSON.parse(sq.question.options)
+                    : [];
+                  const studentAnswers = sq.options
+                    ? JSON.parse(sq.options)
+                    : [];
 
-                const qScore =
-                  sq.score !== null
-                    ? Number((sq.score * 10) / totalQuestions).toFixed(2)
-                    : '0.00';
+                  const qScore =
+                    sq.score !== null
+                      ? Number((sq.score * 10) / totalQuestions).toFixed(2)
+                      : '0.00';
 
-                return `
+                  let imageUrl = sq.question.image_url;
+                  if (imageUrl && !imageUrl.startsWith('http')) {
+                    // Prepend questions-images prefix if it's missing (images are stored in this folder)
+                    const objectName = imageUrl.startsWith('questions-images/')
+                      ? imageUrl
+                      : `questions-images/${imageUrl}`;
+
+                    try {
+                      const resolved =
+                        await this.minioService.getViewUrl(objectName);
+                      if (resolved?.url) {
+                        imageUrl = resolved.url;
+                        console.log(`Resolved submission image: ${imageUrl}`);
+                      }
+                    } catch (e) {
+                      console.error('Error resolving submission image:', e);
+                    }
+                  } else if (imageUrl) {
+                    console.log(
+                      `Using direct submission image URL: ${imageUrl}`,
+                    );
+                  }
+
+                  return `
                 <div class="no-break border-2 rounded-2xl p-6 shadow-sm ${sq.is_correct ? 'border-green-100 bg-green-50/20' : 'border-red-100 bg-red-50/20'}">
                     <div class="flex justify-between items-center mb-4">
                         <div class="flex items-center gap-3">
@@ -199,6 +236,18 @@ export class PdfService {
                     <div class="text-lg font-medium text-gray-800 mb-6">
                         ${sq.question.question_text}
                     </div>
+
+                    ${
+                      imageUrl
+                        ? `
+                        <div class="my-6 flex justify-center w-full">
+                            <div style="background-color: white; border-radius: 1rem; border: 1px solid #f3f4f6; padding: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: inline-block;">
+                                <img src="${imageUrl}" style="max-width: 100%; max-height: 400px; display: block; border-radius: 0.5rem; margin: 0 auto;" />
+                            </div>
+                        </div>
+                        `
+                        : ''
+                    }
 
                     ${
                       sq.question.question_type === 'ESSAY'
@@ -254,8 +303,9 @@ export class PdfService {
                     }
                 </div>
               `;
-              })
-              .join('')}
+                }),
+              )
+            ).join('')}
         </div>
     </div>
 
@@ -403,10 +453,35 @@ export class PdfService {
         <!-- Questions Section -->
         <div class="space-y-6">
             <h2 class="text-xl font-bold text-gray-900 border-b-2 border-blue-600 pb-2 mb-8 uppercase tracking-tight">Phần nội dung câu hỏi</h2>
-            ${questions
-              .map((q, index) => {
-                const options = q.options ? JSON.parse(q.options) : [];
-                return `
+            ${(
+              await Promise.all(
+                questions.map(async (q, index) => {
+                  const options = q.options ? JSON.parse(q.options) : [];
+
+                  let imageUrl = q.image_url;
+                  if (imageUrl && !imageUrl.startsWith('http')) {
+                    // Prepend questions-images prefix if it's missing
+                    const objectName = imageUrl.startsWith('questions-images/')
+                      ? imageUrl
+                      : `questions-images/${imageUrl}`;
+
+                    try {
+                      const resolved =
+                        await this.minioService.getViewUrl(objectName);
+                      if (resolved?.url) {
+                        imageUrl = resolved.url;
+                        console.log(`Resolved blank exam image: ${imageUrl}`);
+                      }
+                    } catch (e) {
+                      console.error('Error resolving blank exam image:', e);
+                    }
+                  } else if (imageUrl) {
+                    console.log(
+                      `Using direct blank exam image URL: ${imageUrl}`,
+                    );
+                  }
+
+                  return `
                 <div class="no-break page-break-inside-avoid border-2 border-gray-50 rounded-2xl p-6 shadow-sm bg-white">
                     <div class="flex gap-4 mb-4">
                         <span class="bg-blue-600 self-start px-3 py-1 rounded-lg text-white font-bold text-sm">Câu ${index + 1}</span>
@@ -416,10 +491,12 @@ export class PdfService {
                     </div>
 
                     ${
-                      q.image_url
+                      imageUrl
                         ? `
-                        <div class="my-6 flex justify-center">
-                            <img src="${q.image_url}" class="max-w-[100%] max-h-[400px] object-contain rounded-xl border border-gray-100 shadow-lg" />
+                        <div class="my-6 flex justify-center w-full">
+                            <div style="background-color: white; border-radius: 1rem; border: 1px solid #f3f4f6; padding: 0.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); display: inline-block;">
+                                <img src="${imageUrl}" style="max-width: 100%; max-height: 400px; display: block; border-radius: 0.5rem; margin: 0 auto;" />
+                            </div>
                         </div>
                         `
                         : ''
@@ -450,8 +527,9 @@ export class PdfService {
                     }
                 </div>
                 `;
-              })
-              .join('')}
+                }),
+              )
+            ).join('')}
         </div>
 
         <!-- Footer -->
