@@ -74,6 +74,14 @@ enum SubmissionStatus {
     CANCELLED
 }
 
+enum NotificationType {
+    INFO
+    WARNING
+    ERROR
+    SUCCESS
+    SYSTEM
+}
+
 abstract model Base {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   created_at DateTime @default(now())
@@ -99,6 +107,7 @@ model User extends Base {
     questions Question[]
     submissions Submission[]
     registrations ExamRegistration[]
+    notifications Notification[]
 
     // map tables
     @@map("users")
@@ -266,6 +275,23 @@ model ExamRegistration extends Base {
     @@allow('update', (auth().role == 'LECTURER' && exam.lecturer == auth()) || auth().role == 'ADMIN')
     @@allow('delete', (auth().role == 'LECTURER' && exam.lecturer == auth()) || auth().role == 'ADMIN')
 }
+
+model Notification extends Base {
+    user_id String @db.Uuid
+    title String
+    content String
+    is_read Boolean @default(false)
+    type NotificationType
+    link String?
+
+    user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+    @@map("notifications")
+
+    @@allow('all', auth().role == 'ADMIN')
+    @@allow('read', auth().role == 'STUDENT' && user == auth())
+    @@allow('read', auth().role == 'LECTURER' && user == auth())
+} 
 
 /*
 Generate Prisma schema & client:

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { INTERNAL_PRISMA_CLIENT } from '@/prisma/prisma.module';
 import { PrismaClient } from '../../generated/prisma-client';
 import * as puppeteer from 'puppeteer';
-import { MinioService } from '@/minio/minio.service';
+import { S3Service } from '@/s3/s3.service';
 
 type EnhancedPrismaClient = Omit<
   PrismaClient,
@@ -14,7 +14,7 @@ export class PdfService {
   constructor(
     @Inject(INTERNAL_PRISMA_CLIENT)
     private readonly prisma: EnhancedPrismaClient,
-    private readonly minioService: MinioService,
+    private readonly s3Service: S3Service,
   ) {}
 
   async generateSubmissionPdf(submissionId: string): Promise<Buffer> {
@@ -205,7 +205,7 @@ export class PdfService {
 
                     try {
                       const resolved =
-                        await this.minioService.getViewUrl(objectName);
+                        await this.s3Service.getViewUrl(objectName);
                       if (resolved?.url) {
                         imageUrl = resolved.url;
                         console.log(`Resolved submission image: ${imageUrl}`);
@@ -467,7 +467,7 @@ export class PdfService {
 
                     try {
                       const resolved =
-                        await this.minioService.getViewUrl(objectName);
+                        await this.s3Service.getViewUrl(objectName);
                       if (resolved?.url) {
                         imageUrl = resolved.url;
                         console.log(`Resolved blank exam image: ${imageUrl}`);

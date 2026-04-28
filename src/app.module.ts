@@ -9,8 +9,9 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import type { Request } from 'express';
 import { REQUEST } from '@nestjs/core';
-import { MinioModule } from './minio/minio.module';
+import { S3Module } from './s3/s3.module';
 import { SubmissionModule } from './submission/submission.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -24,6 +25,8 @@ import { SubmissionModule } from './submission/submission.module';
     PrismaModule,
     ZenStackModule.registerAsync({
       useFactory: (request: Request, prisma: PrismaService) => {
+        console.log('=== ZenStack Initializing ===');
+        console.log('Is Prisma Extended:', !!(prisma as any).$extends);
         console.log('=== ZenStack Current User Context ===');
         console.log(JSON.stringify(request?.user, null, 2));
         console.log('=====================================');
@@ -33,11 +36,11 @@ import { SubmissionModule } from './submission/submission.module';
         };
       },
       inject: [REQUEST, PrismaService],
-      extraProviders: [PrismaService],
       global: true,
     }),
-    MinioModule,
+    S3Module,
     SubmissionModule,
+    NotificationModule,
     // ZenStackModule.registerAsync({
     //   useFactory: (prisma: PrismaService) => ({
     //     getEnhancedPrisma: (req?: any) => {
@@ -51,6 +54,6 @@ import { SubmissionModule } from './submission/submission.module';
     // }),
   ],
   controllers: [AppController],
-  providers: [AppService, PrismaService],
+  providers: [AppService],
 })
 export class AppModule {}

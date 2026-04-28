@@ -1,14 +1,102 @@
+import { PrismaService } from './prisma.service';
+import {
+  INTERNAL_PRISMA_CLIENT,
+  POLICY_AWARE_PRISMA_CLIENT,
+} from './prisma.constants';
+import { NotificationGateway } from '../notification/notification.gateway';
+import { NotificationService } from '../notification/notification.service';
 import { Global, Module, Provider, Scope } from '@nestjs/common';
-import { APP_INTERCEPTOR, REQUEST } from '@nestjs/core';
+import { REQUEST, ModuleRef } from '@nestjs/core';
 import { PrismaClient } from '../../generated/prisma-client';
 import { enhance } from '@zenstackhq/runtime';
 import { Request } from 'express';
 import { ZenStackModule } from '@zenstackhq/server/nestjs';
-import { PrismaService } from './prisma.service';
 
-// Định nghĩa Injection Tokens
-export const INTERNAL_PRISMA_CLIENT = 'INTERNAL_PRISMA_CLIENT';
-export const POLICY_AWARE_PRISMA_CLIENT = 'POLICY_AWARE_PRISMA_CLIENT';
+export * from './prisma.constants';
+
+const prismaServiceProvider: Provider = {
+  provide: PrismaService,
+  inject: [ModuleRef],
+  useFactory: (moduleRef: ModuleRef) => {
+    const client = new PrismaClient();
+
+    const extended = client.$extends({
+      query: {
+        $allModels: {
+          async $allOperations({ model, operation, args, query }) {
+            // Broad logging for debugging
+            console.log(`[Ext] Op: ${operation}, Model: ${model || 'N/A'}`);
+
+            const result = await query(args);
+
+            // Dashboard update logic for Prisma 6
+            const isMutation = [
+              'create',
+              'update',
+              'delete',
+              'upsert',
+              'createMany',
+              'updateMany',
+              'deleteMany',
+            ].includes(operation);
+
+            const modelsToWatch = [
+              'Exam',
+              'Question',
+              'User',
+              'Submission',
+            ].map((m) => m.toLowerCase());
+
+            if (
+              isMutation &&
+              model &&
+              modelsToWatch.includes(model.toLowerCase())
+            ) {
+              console.log(`[Hook] Detected mutation: ${model}.${operation}`);
+              // Delay to ensure the transaction is committed
+              setTimeout(async () => {
+                try {
+                  const gateway = moduleRef.get(NotificationGateway, {
+                    strict: false,
+                  });
+                  const service = moduleRef.get(NotificationService, {
+                    strict: false,
+                  });
+                  if (gateway && service) {
+                    console.log(
+                      `[Hook] Fetching metrics from ${model}.${operation}...`,
+                    );
+                    const metrics = await service.getDashboardMetrics();
+                    gateway.pushAdminDashboardUpdate(metrics);
+                    console.log(
+                      `[Hook] Dashboard update sent after ${model}.${operation}`,
+                    );
+                  } else {
+                    console.warn(
+                      `[Hook] NotificationGateway or Service not available`,
+                    );
+                  }
+                } catch (e) {
+                  console.error(`[Hook] Error pushing dashboard update:`, e);
+                }
+              }, 500); // Increased delay slightly
+            }
+
+            return result;
+          },
+        },
+      },
+    });
+
+    // Add NestJS lifecycle hook to the extended client
+    (extended as any).onModuleDestroy = async () => {
+      await client.$disconnect();
+    };
+
+    console.log('Prisma Extended Client initialized (Prisma 6 hooks)');
+    return extended;
+  },
+};
 
 /**
  * Provider cho Internal Client
@@ -17,9 +105,10 @@ export const POLICY_AWARE_PRISMA_CLIENT = 'POLICY_AWARE_PRISMA_CLIENT';
  */
 const internalPrismaProvider: Provider = {
   provide: INTERNAL_PRISMA_CLIENT,
-  useFactory: () => {
+  inject: [PrismaService],
+  useFactory: (prisma: PrismaService) => {
     // Không truyền context -> bỏ qua access policy
-    return enhance(new PrismaClient());
+    return enhance(prisma);
   },
 };
 
@@ -31,14 +120,14 @@ const internalPrismaProvider: Provider = {
 const policyAwarePrismaProvider: Provider = {
   provide: POLICY_AWARE_PRISMA_CLIENT,
   scope: Scope.REQUEST, // Rất quan trọng! Mỗi request sẽ có một instance riêng.
-  inject: [REQUEST], // ✅ Inject đối tượng REQUEST
-  useFactory: (req: Request | any) => {
+  inject: [REQUEST, PrismaService], // ✅ Inject đối tượng REQUEST và PrismaService
+  useFactory: (req: Request | any, prisma: PrismaService) => {
     // Giả định rằng một AuthGuard đã xác thực JWT và gắn user vào request.
     // Ví dụ: req.user = { id: 1, role: 'USER' }
     const user = req.user;
 
     // Truyền user vào context để ZenStack áp dụng access policy
-    return enhance(new PrismaClient(), { user });
+    return enhance(prisma, { user });
   },
 };
 
@@ -46,16 +135,12 @@ const policyAwarePrismaProvider: Provider = {
 @Module({
   imports: [
     // ZenStackModule cung cấp các tiện ích cần thiết.
-    // Nó không còn cần thiết nếu bạn không dùng ZenStackInterceptor, nhưng giữ lại cũng không sao.
     ZenStackModule,
   ],
   providers: [
     internalPrismaProvider,
     policyAwarePrismaProvider,
-    PrismaService,
-    // Bạn vẫn cần một cơ chế để lấy user từ JWT và gắn vào request.
-    // Thường thì việc này được thực hiện bởi một AuthGuard toàn cục hoặc trên từng route.
-    // ZenStackInterceptor chỉ hữu ích nếu bạn dùng ClsService.
+    prismaServiceProvider,
   ],
   exports: [INTERNAL_PRISMA_CLIENT, POLICY_AWARE_PRISMA_CLIENT, PrismaService],
 })

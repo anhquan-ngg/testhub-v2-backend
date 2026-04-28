@@ -68,6 +68,14 @@ enum SubmissionStatus {
   CANCELLED
 }
 
+enum NotificationType {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+  SYSTEM
+}
+
 model User {
   id            String             @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
   created_at    DateTime           @default(now())
@@ -86,6 +94,7 @@ model User {
   questions     Question[]
   submissions   Submission[]
   registrations ExamRegistration[]
+  notifications Notification[]
 
   @@map("users")
 }
@@ -193,4 +202,19 @@ model ExamRegistration {
 
   @@unique([exam_id, student_id])
   @@map("exam_registrations")
+}
+
+model Notification {
+  id         String           @id() @default(dbgenerated("gen_random_uuid()")) @db.Uuid()
+  created_at DateTime         @default(now())
+  updated_at DateTime         @updatedAt()
+  user_id    String           @db.Uuid()
+  title      String
+  content    String
+  is_read    Boolean          @default(false)
+  type       NotificationType
+  link       String?
+  user       User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
 }
