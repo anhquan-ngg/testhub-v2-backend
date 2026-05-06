@@ -8,8 +8,9 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Prisma } from '../../generated/prisma-client';
 import { NotificationService } from './notification.service';
+
+type NotificationCreateInput = Record<string, unknown>;
 
 @WebSocketGateway({
   cors: {
@@ -24,7 +25,7 @@ export class NotificationGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
   @WebSocketServer()
-  server: Server;
+  server!: Server;
 
   constructor(private readonly notificationService: NotificationService) {}
 
@@ -92,7 +93,7 @@ export class NotificationGateway
   // Gửi notification đến một user cụ thể
   async sendToUser(
     userId: string,
-    notification: Prisma.NotificationCreateInput,
+    notification: NotificationCreateInput,
   ) {
     const saved = await this.notificationService.create(notification);
     this.server.to(`user:${userId}`).emit('notification:new', saved);
@@ -102,7 +103,7 @@ export class NotificationGateway
   }
 
   // Broadcast đến tất cả user (thông báo hệ thống)
-  async broadcast(notification: Prisma.NotificationCreateInput) {
+  async broadcast(notification: NotificationCreateInput) {
     this.server.emit('notification:broadcast', notification);
   }
 

@@ -1,21 +1,18 @@
-import { INTERNAL_PRISMA_CLIENT } from '@/prisma/prisma.constants';
-import { Inject, Injectable } from '@nestjs/common';
-import { Prisma, PrismaClient } from '../../generated/prisma-client';
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '@/prisma/prisma.service';
 
-type EnhancedPrismaClient = Omit<
-  PrismaClient,
-  '$use' | '$on' | '$connect' | '$disconnect' | '$transaction' | '$extends'
->;
+type NotificationCreateInput = Record<string, unknown>;
 
 @Injectable()
 export class NotificationService {
-  constructor(
-    @Inject(INTERNAL_PRISMA_CLIENT)
-    private readonly internalPrisma: EnhancedPrismaClient,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
+
+  private get prismaUnsafe(): Record<string, any> {
+    return this.prisma as unknown as Record<string, any>;
+  }
 
   async getUnread(userId: string) {
-    return this.internalPrisma.notification.findMany({
+    return this.prismaUnsafe.notification.findMany({
       where: {
         user_id: userId,
         is_read: false,
@@ -27,7 +24,7 @@ export class NotificationService {
   }
 
   async countUnread(userId: string) {
-    return this.internalPrisma.notification.count({
+    return this.prismaUnsafe.notification.count({
       where: {
         user_id: userId,
         is_read: false,
@@ -36,7 +33,7 @@ export class NotificationService {
   }
 
   async markAsRead(notificationId: string) {
-    return this.internalPrisma.notification.update({
+    return this.prismaUnsafe.notification.update({
       where: {
         id: notificationId,
       },
@@ -47,7 +44,7 @@ export class NotificationService {
   }
 
   async markAllAsRead(userId: string) {
-    return this.internalPrisma.notification.updateMany({
+    return this.prismaUnsafe.notification.updateMany({
       where: {
         user_id: userId,
         is_read: false,
@@ -58,8 +55,8 @@ export class NotificationService {
     });
   }
 
-  async create(notification: Prisma.NotificationCreateInput) {
-    return this.internalPrisma.notification.create({
+  async create(notification: NotificationCreateInput) {
+    return this.prismaUnsafe.notification.create({
       data: notification,
     });
   }
@@ -67,13 +64,13 @@ export class NotificationService {
   async getAll(userId: string, page = 1, limit = 20) {
     const skip = (page - 1) * limit;
     const [items, total] = await Promise.all([
-      this.internalPrisma.notification.findMany({
+      this.prismaUnsafe.notification.findMany({
         where: { user_id: userId },
         orderBy: { created_at: 'desc' },
         skip,
         take: limit,
       }),
-      this.internalPrisma.notification.count({
+      this.prismaUnsafe.notification.count({
         where: { user_id: userId },
       }),
     ]);
@@ -83,10 +80,10 @@ export class NotificationService {
   async getDashboardMetrics() {
     const [usersCount, examsCount, questionsCount, submissionsCount] =
       await Promise.all([
-        this.internalPrisma.user.count(),
-        this.internalPrisma.exam.count(),
-        this.internalPrisma.question.count(),
-        this.internalPrisma.submission.count({
+        this.prisma.user.count(),
+        this.prisma.exam.count(),
+        this.prisma.question.count(),
+        this.prisma.submission.count({
           where: { status: 'COMPLETED' },
         }),
       ]);
@@ -96,21 +93,21 @@ export class NotificationService {
   // ─── Exam Registration Helpers ───────────────────────────────────────────
 
   async findExamWithLecturer(examId: string) {
-    return this.internalPrisma.exam.findUnique({
+    return this.prismaUnsafe.exam.findUnique({
       where: { id: examId },
       include: { lecturer: { select: { id: true, full_name: true } } },
     });
   }
 
   async findUser(userId: string) {
-    return this.internalPrisma.user.findUnique({
+    return this.prismaUnsafe.user.findUnique({
       where: { id: userId },
       select: { id: true, full_name: true, email: true },
     });
   }
 
   async findExamRegistration(registrationId: string) {
-    return this.internalPrisma.examRegistration.findUnique({
+    return this.prismaUnsafe.examRegistration.findUnique({
       where: { id: registrationId },
       include: {
         exam: {
@@ -128,7 +125,7 @@ export class NotificationService {
     studentId: string,
     status: 'PENDING' | 'APPROVED',
   ) {
-    return this.internalPrisma.examRegistration.create({
+    return this.prismaUnsafe.examRegistration.create({
       data: {
         exam: { connect: { id: examId } },
         student: { connect: { id: studentId } },
@@ -145,7 +142,7 @@ export class NotificationService {
     registrationId: string,
     status: 'APPROVED' | 'REJECTED',
   ) {
-    return this.internalPrisma.examRegistration.update({
+    return this.prismaUnsafe.examRegistration.update({
       where: { id: registrationId },
       data: { status },
       include: {
@@ -156,7 +153,7 @@ export class NotificationService {
   }
 
   async findUserByEmail(email: string, role?: string) {
-    return this.internalPrisma.user.findFirst({
+    return this.prismaUnsafe.user.findFirst({
       where: {
         email,
         ...(role ? { role: role as any } : {}),

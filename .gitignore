@@ -65,3 +65,5 @@ quanna-keypair.pem
 /src/generated
 /generated
 *.dump
+
+/src/generated/prisma
