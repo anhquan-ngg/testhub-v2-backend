@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { NotificationService } from './notification.service';
 import { NotificationGateway } from './notification.gateway';
-import { JwtAuthGuard } from '@/auth/guards/jwt-auth.guard';
+import { JwtGuard } from '@/auth/guards/jwt.guard';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
 @Controller('notification')
@@ -21,7 +21,7 @@ export class NotificationController {
 
   // ─── Notification CRUD ────────────────────────────────────────────────────
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtGuard)
   @Get('/history')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get notification history (paginated)' })
@@ -38,7 +38,7 @@ export class NotificationController {
     );
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtGuard)
   @Get('/unread-count')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get unread notification count' })
@@ -53,7 +53,7 @@ export class NotificationController {
   /**
    * Student requests to join an exam → notify lecturer
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtGuard)
   @Post('/exam/request-registration')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Student requests exam registration' })
@@ -107,7 +107,7 @@ export class NotificationController {
   /**
    * Lecturer approves a registration → notify student
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtGuard)
   @Post('/exam/approve-registration')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Lecturer approves exam registration' })
@@ -150,7 +150,7 @@ export class NotificationController {
   /**
    * Lecturer manually adds a student to an exam → notify student
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtGuard)
   @Post('/exam/add-student')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Lecturer adds student to exam directly' })

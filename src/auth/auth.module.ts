@@ -5,6 +5,9 @@ import { JwtModule } from '@nestjs/jwt';
 import { Module } from '@nestjs/common';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
+import { GoogleStrategy } from './strategies/google.strategy';
+import { OutlookStrategy } from './strategies/outlook.strategy';
 import { PrismaModule } from '@/prisma/prisma.module';
 
 @Module({
@@ -26,7 +29,20 @@ import { PrismaModule } from '@/prisma/prisma.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [JwtStrategy, AuthService, PassportModule],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtRefreshStrategy,
+    GoogleStrategy,
+    OutlookStrategy,
+  ],
+  exports: [
+    AuthService,
+    JwtStrategy,
+    JwtRefreshStrategy,
+    GoogleStrategy,
+    OutlookStrategy,
+    PassportModule,
+  ],
 })
 export class AuthModule {}
