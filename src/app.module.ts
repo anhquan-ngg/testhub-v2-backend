@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 // import { SubmissionModule } from './submission/submission.module';
 // import { NotificationModule } from './notification/notification.module';
 import { EncryptionModule } from './encryption/encryption.module';
+import { ModelModule } from './model/model.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { EncryptionModule } from './encryption/encryption.module';
     // S3Module,
     // SubmissionModule,
     // NotificationModule,
+    ModelModule,
   ],
   controllers: [AppController],
   providers: [AppService],

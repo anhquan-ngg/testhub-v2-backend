@@ -26,6 +26,42 @@ const ALLOWED_ACTIONS = new Set([
   'upsert',
 ]);
 
+const READ_ACTIONS = new Set(['findMany', 'findFirst', 'count']);
+
+function normalizeExamReadArgs(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const whereValue = args.where;
+
+  if (
+    !whereValue ||
+    typeof whereValue !== 'object' ||
+    Array.isArray(whereValue)
+  ) {
+    return args;
+  }
+
+  const where = { ...(whereValue as Record<string, unknown>) };
+
+  if (!('status' in where)) {
+    return args;
+  }
+
+  const status = where.status;
+  delete where.status;
+
+  if (status === 'ACTIVE') {
+    where.is_deleted = false;
+  } else if (status === 'INACTIVE') {
+    where.is_deleted = true;
+  }
+
+  return {
+    ...args,
+    where,
+  };
+}
+
 function toPrismaModelName(modelName: string): string {
   if (!modelName) {
     return modelName;
@@ -70,6 +106,12 @@ export class ModelController {
       );
     }
 
-    return operation.call(modelClient, body.args ?? {});
+    const args = body.args ?? {};
+    const normalizedArgs =
+      prismaModelName === 'exam' && READ_ACTIONS.has(action)
+        ? normalizeExamReadArgs(args)
+        : args;
+
+    return operation.call(modelClient, normalizedArgs);
   }
 }

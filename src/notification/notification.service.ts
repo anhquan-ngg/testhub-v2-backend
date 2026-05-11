@@ -81,7 +81,11 @@ export class NotificationService {
     const [usersCount, examsCount, questionsCount, submissionsCount] =
       await Promise.all([
         this.prisma.user.count(),
-        this.prisma.exam.count(),
+        this.prisma.exam.count({
+          where: {
+            is_deleted: false,
+          },
+        }),
         this.prisma.question.count(),
         this.prisma.submission.count({
           where: { status: 'COMPLETED' },
