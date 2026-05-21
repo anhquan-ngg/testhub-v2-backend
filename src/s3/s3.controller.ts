@@ -1,9 +1,16 @@
 import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
 import { S3Service } from './s3.service';
-import { ApiBody, ApiOperation, ApiQuery, ApiResponse } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiOperation,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ListObjectDto, uploadURLDto, CheckFileDto } from './dto/req.dto';
 import { BucketItemDto, UrlDto, CheckFileResponseDto } from './dto/res.dto';
 
+@ApiTags('S3')
 @Controller('s3')
 export class S3Controller {
   constructor(private readonly s3Service: S3Service) {}

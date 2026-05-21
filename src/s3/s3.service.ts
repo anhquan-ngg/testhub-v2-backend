@@ -47,6 +47,15 @@ export class S3Service implements OnModuleInit {
     return { url };
   }
 
+  createStorageUrl(objectName: string): string {
+    const encodedObjectName = objectName
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/');
+
+    return `https://${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com/${encodedObjectName}`;
+  }
+
   async findAll({ path, limit, startAfter }: ListObjectDto) {
     console.log('=== S3 Service findAll ===');
     console.log('Input params:', { path, limit, startAfter });
