@@ -36,17 +36,27 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         email: true,
         role: true,
         status: true,
+        files: {
+          where: {
+            entity_type: 'users',
+            entity_id: payload.sub,
+            status: 'AVAILABLE',
+          },
+          orderBy: { uploaded_at: 'desc' },
+          take: 1,
+          select: {
+            url: true,
+          },
+        },
       },
-    });
-
-    const avatar = await this.prisma.file.findFirst({
-      where: { entity_type: 'users', entity_id: payload.sub },
     });
 
     if (!user || user.status !== 'ACTIVE') {
       throw new UnauthorizedException('Account is not active');
     }
 
-    return { ...user, avatar_url: avatar?.url };
+    const { files, ...userWithoutFiles } = user;
+
+    return { ...userWithoutFiles, avatar_url: files[0]?.url };
   }
 }

@@ -51,7 +51,8 @@ export class FilesService {
       throw new BadRequestException('File does not exist on S3 yet');
     }
 
-    return this.filesRepository.markAvailable(id);
+    await this.filesRepository.markAvailable(id, uploadedBy);
+    return this.findOne(uploadedBy, id);
   }
 
   async createDownloadUrl(uploadedBy: string, id: string) {
@@ -66,8 +67,14 @@ export class FilesService {
 
   async remove(uploadedBy: string, id: string) {
     const file = await this.findOne(uploadedBy, id);
-    await this.s3Service.remove(file.s3_key);
-    await this.filesRepository.softDelete(id);
+    await this.filesRepository.softDelete(id, uploadedBy);
+    try {
+      await this.s3Service.remove(file.s3_key);
+    } catch (error) {
+      // Revert soft-delete if S3 removal fails, keeping consistency
+      await this.filesRepository.markAvailable(id, uploadedBy);
+      throw error;
+    }
 
     return { message: 'File deleted successfully' };
   }

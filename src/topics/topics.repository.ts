@@ -98,13 +98,23 @@ export class TopicsRepository {
     });
   }
 
+  async findByIdIncludingDeleted(id: string) {
+    return this.prisma.topic.findUnique({
+      where: { id },
+      select: this.adminSelectWithChapter,
+    });
+  }
+
   async update(id: string, dto: UpdateTopicDto) {
-    return this.prisma.topic.update({ where: { id }, data: dto });
+    return this.prisma.topic.updateMany({
+      where: { id, is_deleted: false },
+      data: dto,
+    });
   }
 
   async softDelete(id: string) {
-    return this.prisma.topic.update({
-      where: { id },
+    return this.prisma.topic.updateMany({
+      where: { id, is_deleted: false },
       data: { is_deleted: true, deleted_at: new Date() },
     });
   }

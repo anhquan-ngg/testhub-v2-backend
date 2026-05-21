@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -33,13 +34,17 @@ export class UsersService {
   }
 
   async update(id: string, dto: UpdateUserDto) {
+    if (dto.email !== undefined) {
+      throw new BadRequestException('Email cannot be updated');
+    }
+
     await this.findOne(id);
     return this.usersRepository.update(id, dto);
   }
 
-  async remove(id: string) {
+  async deactivate(id: string) {
     await this.findOne(id);
-    await this.usersRepository.remove(id);
-    return { message: 'User deleted successfully' };
+    await this.usersRepository.deactivate(id);
+    return { message: 'User deactivated successfully' };
   }
 }

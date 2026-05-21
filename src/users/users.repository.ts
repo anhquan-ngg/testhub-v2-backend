@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUserDto } from './dto/query-user.dto';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 
 @Injectable()
 export class UsersRepository {
@@ -24,8 +25,13 @@ export class UsersRepository {
   } satisfies Prisma.UserSelect;
 
   async create(dto: CreateUserDto) {
+    const data = { ...dto };
+    if (data.password) {
+      const saltRounds = 10;
+      data.password = await bcrypt.hash(data.password, saltRounds);
+    }
     return this.prisma.user.create({
-      data: dto,
+      data,
       select: this.select,
     });
   }
@@ -67,18 +73,30 @@ export class UsersRepository {
   }
 
   async findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
-  }
-
-  async update(id: string, dto: UpdateUserDto) {
-    return this.prisma.user.update({
-      where: { id },
-      data: dto,
+    return this.prisma.user.findUnique({
+      where: { email },
       select: this.select,
     });
   }
 
-  async remove(id: string) {
-    return this.prisma.user.delete({ where: { id } });
+  async update(id: string, dto: UpdateUserDto) {
+    const data = { ...dto };
+    if (data.password) {
+      const saltRounds = 10;
+      data.password = await bcrypt.hash(data.password, saltRounds);
+    }
+    return this.prisma.user.update({
+      where: { id },
+      data,
+      select: this.select,
+    });
+  }
+
+  async deactivate(id: string) {
+    return this.prisma.user.update({
+      where: { id },
+      data: { status: UserStatus.INACTIVE },
+      select: this.select,
+    });
   }
 }

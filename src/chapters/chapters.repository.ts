@@ -54,13 +54,40 @@ export class ChaptersRepository {
     return { data, total, page, limit };
   }
 
-  async findById(id: string) {
+  async findById(id: string, isAdmin = false) {
+    const chapterSelect = isAdmin ? this.adminSelect : this.publicSelect;
+
     return this.prisma.chapter.findFirst({
-      where: { id, is_deleted: false },
-      include: {
-        children: { where: { is_deleted: false }, orderBy: { order: 'asc' } },
-        topic: true,
-        parent: true,
+      where: {
+        id,
+        is_deleted: false,
+        topic: { is_deleted: false },
+        OR: [{ parent_id: null }, { parent: { is: { is_deleted: false } } }],
+      },
+      select: {
+        ...chapterSelect,
+        children: {
+          where: { is_deleted: false },
+          orderBy: { order: 'asc' },
+          select: chapterSelect,
+        },
+        topic: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        parent: {
+          select: {
+            id: true,
+            name: true,
+            order: true,
+            ...(isAdmin && {
+              is_deleted: true,
+              deleted_at: true,
+            }),
+          },
+        },
       },
     });
   }

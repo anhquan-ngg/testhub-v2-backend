@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { TopicsRepository } from './topics.repository';
 import { CreateTopicDto } from './dto/create-topic.dto';
 import { UpdateTopicDto } from './dto/update-topic.dto';
@@ -25,13 +29,36 @@ export class TopicsService {
   }
 
   async update(id: string, dto: UpdateTopicDto) {
-    await this.findOne(id);
-    return this.topicsRepository.update(id, dto);
+    await this.assertTopicCanBeModified(id);
+    const result = await this.topicsRepository.update(id, dto);
+
+    if (result.count === 0) {
+      throw new BadRequestException('Topic has already been deleted');
+    }
+
+    return this.findOne(id);
   }
 
   async remove(id: string) {
-    await this.findOne(id);
-    await this.topicsRepository.softDelete(id);
+    await this.assertTopicCanBeModified(id);
+    const result = await this.topicsRepository.softDelete(id);
+
+    if (result.count === 0) {
+      throw new BadRequestException('Topic has already been deleted');
+    }
+
     return { message: 'Topic deleted successfully' };
+  }
+
+  private async assertTopicCanBeModified(id: string) {
+    const topic = await this.topicsRepository.findByIdIncludingDeleted(id);
+
+    if (!topic) {
+      throw new NotFoundException(`Topic with id "${id}" not found`);
+    }
+
+    if (topic.is_deleted) {
+      throw new BadRequestException('Topic has already been deleted');
+    }
   }
 }

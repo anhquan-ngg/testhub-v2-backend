@@ -16,8 +16,8 @@ export class ChaptersService {
     return this.chaptersRepository.findMany(query, isAdmin);
   }
 
-  async findOne(id: string) {
-    const chapter = await this.chaptersRepository.findById(id);
+  async findOne(id: string, isAdmin = false) {
+    const chapter = await this.chaptersRepository.findById(id, isAdmin);
     if (!chapter) {
       throw new NotFoundException(`Chapter with id "${id}" not found`);
     }

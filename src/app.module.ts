@@ -8,7 +8,6 @@ import { S3Module } from './s3/s3.module';
 // import { SubmissionModule } from './submission/submission.module';
 // import { NotificationModule } from './notification/notification.module';
 import { EncryptionModule } from './encryption/encryption.module';
-import { ModelModule } from './model/model.module';
 import { UsersModule } from './users/users.module';
 import { TopicsModule } from './topics/topics.module';
 import { ChaptersModule } from './chapters/chapters.module';
@@ -27,7 +26,6 @@ import { FilesModule } from './files/files.module';
     S3Module,
     // SubmissionModule,
     // NotificationModule,
-    ModelModule,
     UsersModule,
     TopicsModule,
     ChaptersModule,

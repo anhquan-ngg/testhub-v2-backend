@@ -64,16 +64,24 @@ export class FilesRepository {
     });
   }
 
-  markAvailable(id: string) {
-    return this.prisma.file.update({
-      where: { id },
+  markAvailable(id: string, uploadedBy: string) {
+    return this.prisma.file.updateMany({
+      where: {
+        id,
+        uploaded_by: uploadedBy,
+        status: { not: FileStatus.DELETED },
+      },
       data: { status: FileStatus.AVAILABLE },
     });
   }
 
-  softDelete(id: string) {
-    return this.prisma.file.update({
-      where: { id },
+  softDelete(id: string, uploadedBy: string) {
+    return this.prisma.file.updateMany({
+      where: {
+        id,
+        uploaded_by: uploadedBy,
+        status: { not: FileStatus.DELETED },
+      },
       data: { status: FileStatus.DELETED },
     });
   }

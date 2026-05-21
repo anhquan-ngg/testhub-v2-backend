@@ -164,24 +164,30 @@ export class AuthService {
       );
     }
 
-    // Sử dụng internalPrisma để đảm bảo luôn lấy được user
-    // không bị ràng buộc bởi access policy
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: {
+        password: true,
+        status: true,
+      },
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    // User OAuth (Google,...) không có password local
+    if (user.status === 'INACTIVE') {
+      throw new UnauthorizedException('Account is not active');
+    }
+
+    // User OAuth (Google,...) don't have a local password
     if (!user.password) {
       throw new BadRequestException(
         'This account does not use a password. Please login with your OAuth provider.',
       );
     }
 
-    // Kiểm tra mật khẩu hiện tại có đúng không
+    // Check password matching
     const isPasswordMatch = await bcrypt.compare(
       changePasswordDto.currentPassword,
       user.password,
@@ -191,7 +197,7 @@ export class AuthService {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
-    // Kiểm tra mật khẩu mới có trùng với mật khẩu cũ không
+    // Check if the new password is the same as the current password
     const isSamePassword = await bcrypt.compare(
       changePasswordDto.newPassword,
       user.password,
@@ -203,10 +209,15 @@ export class AuthService {
       );
     }
 
-    // Cập nhật mật khẩu
+    const hashedNewPassword = await bcrypt.hash(
+      changePasswordDto.newPassword,
+      12,
+    );
+
+    // Update password
     await this.prisma.user.update({
       where: { id: userId },
-      data: { password: changePasswordDto.newPassword },
+      data: { password: hashedNewPassword },
     });
 
     return {

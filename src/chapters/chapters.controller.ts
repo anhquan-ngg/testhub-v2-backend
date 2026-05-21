@@ -53,8 +53,9 @@ export class ChaptersController {
     summary: 'Get a chapter by ID (includes children, parent, topic)',
   })
   @ApiResponse({ status: 404, description: 'Chapter not found.' })
-  findOne(@Param('id') id: string) {
-    return this.chaptersService.findOne(id);
+  findOne(@Param('id') id: string, @Req() req: Request) {
+    const isAdmin = req.user?.role === 'ADMIN';
+    return this.chaptersService.findOne(id, isAdmin);
   }
 
   @Patch(':id')
