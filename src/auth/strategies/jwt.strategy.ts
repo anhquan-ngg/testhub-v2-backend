@@ -32,9 +32,22 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       where: { id: payload.sub },
       select: {
         id: true,
+        full_name: true,
         email: true,
         role: true,
         status: true,
+        files: {
+          where: {
+            entity_type: 'users',
+            entity_id: payload.sub,
+            status: 'AVAILABLE',
+          },
+          orderBy: { uploaded_at: 'desc' },
+          take: 1,
+          select: {
+            url: true,
+          },
+        },
       },
     });
 
@@ -42,6 +55,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Account is not active');
     }
 
-    return user; // attach to req.user
+    const { files, ...userWithoutFiles } = user;
+
+    return { ...userWithoutFiles, avatar_url: files[0]?.url };
   }
 }

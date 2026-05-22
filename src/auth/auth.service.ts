@@ -40,7 +40,7 @@ export class AuthService {
     const hashedPassword = await bcrypt.hash(signupDto.password, 12);
 
     try {
-      const user =await this.prisma.user.create({
+      const user = await this.prisma.user.create({
         data: {
           full_name: signupDto.full_name,
           email: signupDto.email,
@@ -52,9 +52,8 @@ export class AuthService {
         data: {
           user_id: user.id,
           provider: 'local',
-          
-        }
-      })
+        },
+      });
     } catch (error) {
       console.error('Signup unsuccessfully: ', error);
     }
@@ -64,15 +63,13 @@ export class AuthService {
     };
   }
 
-  // LOCAL LOGIN 
-  async login(
-    loginDto: LoginDto,
-  ) {
+  // LOCAL LOGIN
+  async login(loginDto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
     });
 
-    if (!user || !user.password || user.status === "INACTIVE") {
+    if (!user || !user.password || user.status === 'INACTIVE') {
       throw new UnauthorizedException('Email hoặc mật khẩu không đúng');
     }
 
@@ -90,7 +87,7 @@ export class AuthService {
   // OAUTH LOGIN (Google / Outlook)
   async oauthLogin(oauthUser: {
     email: string;
-    full_name: string; 
+    full_name: string;
     provider: string;
     provider_id: string;
   }) {
@@ -101,29 +98,29 @@ export class AuthService {
         provider_id: oauthUser.provider_id,
       },
       include: { user: true },
-    })
+    });
 
-    if (account){
-      if (account.user.status === 'INACTIVE'){
+    if (account) {
+      if (account.user.status === 'INACTIVE') {
         throw new UnauthorizedException('Account has been banned');
       }
       return this.generateAndSaveTokens(account.user);
     }
-    
+
     // 2. If not exists -> Check email exists
     let user = await this.prisma.user.findFirst({
-      where: { email: oauthUser.email }
-    })
+      where: { email: oauthUser.email },
+    });
 
-    if (!user){
+    if (!user) {
       // 3.a New user -> Create user + create account
       user = await this.prisma.user.create({
         data: {
           full_name: oauthUser.full_name,
           email: oauthUser.email,
           password: null,
-        }
-      })
+        },
+      });
     }
     // 3.b Existing user (local account) -> link OAuth account
     await this.prisma.account.create({
@@ -133,7 +130,7 @@ export class AuthService {
         provider_id: oauthUser.provider_id,
         refresh_token_hash: null,
       },
-    })
+    });
 
     return this.generateAndSaveTokens(user);
   }
@@ -167,22 +164,30 @@ export class AuthService {
       );
     }
 
-    // Sử dụng internalPrisma để đảm bảo luôn lấy được user
-    // không bị ràng buộc bởi access policy
-        const user = await this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: {
+        password: true,
+        status: true,
+      },
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    // User OAuth (Google,...) không có password local
-    if (!user.password) {
-      throw new BadRequestException('This account does not use a password. Please login with your OAuth provider.');
+    if (user.status === 'INACTIVE') {
+      throw new UnauthorizedException('Account is not active');
     }
 
-    // Kiểm tra mật khẩu hiện tại có đúng không
+    // User OAuth (Google,...) don't have a local password
+    if (!user.password) {
+      throw new BadRequestException(
+        'This account does not use a password. Please login with your OAuth provider.',
+      );
+    }
+
+    // Check password matching
     const isPasswordMatch = await bcrypt.compare(
       changePasswordDto.currentPassword,
       user.password,
@@ -192,7 +197,7 @@ export class AuthService {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
-    // Kiểm tra mật khẩu mới có trùng với mật khẩu cũ không
+    // Check if the new password is the same as the current password
     const isSamePassword = await bcrypt.compare(
       changePasswordDto.newPassword,
       user.password,
@@ -204,10 +209,15 @@ export class AuthService {
       );
     }
 
-    // Cập nhật mật khẩu
-        await this.prisma.user.update({
+    const hashedNewPassword = await bcrypt.hash(
+      changePasswordDto.newPassword,
+      12,
+    );
+
+    // Update password
+    await this.prisma.user.update({
       where: { id: userId },
-      data: { password: changePasswordDto.newPassword },
+      data: { password: hashedNewPassword },
     });
 
     return {
@@ -220,7 +230,7 @@ export class AuthService {
     id: string;
     email: string;
     role: string;
-  }){
+  }) {
     const payload = { sub: user.id, email: user.email, role: user.role };
 
     const [accessToken, refreshToken] = await Promise.all([
@@ -232,49 +242,49 @@ export class AuthService {
         secret: this.config.get('JWT_REFRESH_SECRET'),
         expiresIn: this.config.get('JWT_REFRESH_EXPIRES'),
       }),
-    ])
+    ]);
 
     const hash = this.encryption.hashToken(refreshToken);
     await this.prisma.account.updateMany({
       where: { user_id: user.id, provider: 'local' },
       data: { refresh_token_hash: hash },
-    })
+    });
 
     return { accessToken, refreshToken };
   }
 
-  async saveLocalRefreshToken(
-    userId: string, 
-    rawRefreshToken: string
-  ) {
+  async saveLocalRefreshToken(userId: string, rawRefreshToken: string) {
     const hash = this.encryption.hashToken(rawRefreshToken);
 
     await this.prisma.account.upsert({
-      where: { user_id_provider: {user_id: userId, provider: 'local' } },
+      where: { user_id_provider: { user_id: userId, provider: 'local' } },
       update: { refresh_token_hash: hash },
       create: {
         user_id: userId,
-      provider: 'local',
-        refresh_token_hash: hash
+        provider: 'local',
+        refresh_token_hash: hash,
       },
     });
   }
 
   async validateLocalRefreshToken(
     userId: string,
-    rawRefreshToken: string
+    rawRefreshToken: string,
   ): Promise<boolean> {
     const account = await this.prisma.account.findUnique({
-      where: { user_id_provider: {user_id: userId, provider: 'local' } },
+      where: { user_id_provider: { user_id: userId, provider: 'local' } },
     });
 
     if (!account || !account.refresh_token_hash) {
       return false;
     }
-    
+
     const hash = this.encryption.hashToken(rawRefreshToken);
 
-    return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(account.refresh_token_hash));
+    return crypto.timingSafeEqual(
+      Buffer.from(hash),
+      Buffer.from(account.refresh_token_hash),
+    );
   }
 
   // async validateOAuthTokenUser(payload: { token: string }): Promise<any> {
@@ -457,5 +467,3 @@ export class AuthService {
   //   });
   // }
 }
-
-

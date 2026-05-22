@@ -65,8 +65,8 @@ export class AuthController {
       refresh_token: tokens.refreshToken,
     });
     return {
-      message: 'Login successfully'
-    }
+      message: 'Login successfully',
+    };
   }
 
   @UseGuards(JwtRefreshGuard)
@@ -114,10 +114,7 @@ export class AuthController {
 
   @UseGuards(GoogleGuard)
   @Get('google/callback')
-  async googleCallback(
-    @Req() req: ExpressRequest,
-    @Res() res: Response,
-  ) {
+  async googleCallback(@Req() req: ExpressRequest, @Res() res: Response) {
     const tokens = await this.authService.oauthLogin((req as any).user);
     this.setTokenCookies(res, {
       access_token: tokens.accessToken,
@@ -133,10 +130,7 @@ export class AuthController {
 
   @UseGuards(OutlookGuard)
   @Get('outlook/callback')
-  async outlookCallback(
-    @Req() req: ExpressRequest,
-    @Res() res: Response,
-  ) {
+  async outlookCallback(@Req() req: ExpressRequest, @Res() res: Response) {
     const tokens = await this.authService.oauthLogin((req as any).user);
     this.setTokenCookies(res, {
       access_token: tokens.accessToken,
@@ -144,51 +138,6 @@ export class AuthController {
     });
     res.redirect(this.config.get('FRONTEND_URL') ?? '/');
   }
-
-  // @HttpCode(HttpStatus.OK)
-  // @Post('google-login')
-  // @ApiOperation({ summary: 'Login with Google' })
-  // @ApiResponse({ status: 200, description: 'Login successfully.' })
-  // @ApiResponse({ status: 401, description: 'Invalid credentials' })
-  // async googleLogin(
-  //   @Body() googleLoginDto: GoogleLoginDto,
-  //   @Res({ passthrough: true }) response: Response,
-  // ) {
-  //   const { access_token, data } =
-  //     await this.authService.googleLogin(googleLoginDto);
-
-  //   response.cookie('testhub_token', access_token, {
-  //     httpOnly: true,
-  //     path: '/',
-  //     secure: process.env.NODE_ENV === 'production',
-  //     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-  //     domain:
-  //       process.env.NODE_ENV === 'production' ? '.quanna.io.vn' : undefined,
-  //     maxAge: 7 * 24 * 60 * 60 * 1000,
-  //   });
-
-  //   return {
-  //     ...data,
-  //     access_token, // Return access_token for client usage if needed
-  //   };
-  // }
-
-  // @HttpCode(HttpStatus.OK)
-  // @Post('logout')
-  // @ApiOperation({ summary: 'Logout a user' })
-  // @ApiResponse({ status: 200, description: 'Logout successfully.' })
-  // logout(@Res({ passthrough: true }) response: Response) {
-  //   response.clearCookie('testhub_token', {
-  //     httpOnly: true,
-  //     path: '/',
-  //     secure: process.env.NODE_ENV === 'production',
-  //     sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-  //     domain:
-  //       process.env.NODE_ENV === 'production' ? '.quanna.io.vn' : undefined,
-  //   });
-
-  //   return { message: 'Logout successful' };
-  // }
 
   // @UseGuards(JwtGuard)
   // @Get('me')
@@ -225,11 +174,11 @@ export class AuthController {
   private setTokenCookies(
     res: Response,
     tokens: {
-      access_token: string,
-      refresh_token: string
-    }
-  ){
-    const isProduction = this.config.get<string>('node_env') === 'production'
+      access_token: string;
+      refresh_token: string;
+    },
+  ) {
+    const isProduction = this.config.get<string>('node_env') === 'production';
 
     res.cookie('access_token', tokens.access_token, {
       httpOnly: true,
@@ -244,10 +193,10 @@ export class AuthController {
       sameSite: isProduction ? 'strict' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: '/auth/refresh', // Only send this cookie to endpoint refresh
-    })
+    });
   }
 
-  private clearTokenCookies(res: Response){
+  private clearTokenCookies(res: Response) {
     res.clearCookie('access_token');
     res.clearCookie('refresh_token', { path: '/auth/refresh' });
   }
