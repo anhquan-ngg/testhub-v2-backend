@@ -7,6 +7,8 @@ import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class TopicsRepository {
+  private static readonly MAX_LIMIT = 100;
+
   constructor(private readonly prisma: PrismaService) {}
 
   private readonly publicSelect = {
@@ -67,7 +69,12 @@ export class TopicsRepository {
   }
 
   async findMany(query: QueryTopicDto, isAdmin = false) {
-    const { page = 1, limit = 10, search } = query;
+    const { search } = query;
+    const page = Math.max(Number(query.page) || 1, 1);
+    const limit = Math.min(
+      Math.max(Number(query.limit) || 10, 1),
+      TopicsRepository.MAX_LIMIT,
+    );
     const skip = (page - 1) * limit;
 
     const where: Prisma.TopicWhereInput = {

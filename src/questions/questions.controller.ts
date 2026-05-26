@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -47,20 +48,23 @@ export class QuestionsController {
   @Get(':id')
   @ApiOperation({ summary: 'Get a question by ID (includes chapter, lecturer, files)' })
   @ApiResponse({ status: 404, description: 'Question not found.' })
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.questionsService.findOne(id);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update a question' })
-  update(@Param('id') id: string, @Body() dto: UpdateQuestionDto) {
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateQuestionDto,
+  ) {
     return this.questionsService.update(id, dto);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft-delete a question' })
-  remove(@Param('id') id: string) {
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.questionsService.remove(id);
   }
 }

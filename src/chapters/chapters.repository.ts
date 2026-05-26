@@ -34,7 +34,7 @@ export class ChaptersRepository {
     const skip = (page - 1) * limit;
 
     const where: Prisma.ChapterWhereInput = {
-      is_deleted: false,
+      ...(!isAdmin && { is_deleted: false }),
       ...(topic_id && { topic_id }),
       ...(parent_id !== undefined && { parent_id: parent_id ?? null }),
       ...(search && { name: { contains: search, mode: 'insensitive' } }),
@@ -60,7 +60,7 @@ export class ChaptersRepository {
     return this.prisma.chapter.findFirst({
       where: {
         id,
-        is_deleted: false,
+        ...(!isAdmin && { is_deleted: false }),
         topic: { is_deleted: false },
         OR: [{ parent_id: null }, { parent: { is: { is_deleted: false } } }],
       },
