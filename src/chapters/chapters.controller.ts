@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -53,21 +54,24 @@ export class ChaptersController {
     summary: 'Get a chapter by ID (includes children, parent, topic)',
   })
   @ApiResponse({ status: 404, description: 'Chapter not found.' })
-  findOne(@Param('id') id: string, @Req() req: Request) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) {
     const isAdmin = req.user?.role === 'ADMIN';
     return this.chaptersService.findOne(id, isAdmin);
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update a chapter' })
-  update(@Param('id') id: string, @Body() dto: UpdateChapterDto) {
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateChapterDto,
+  ) {
     return this.chaptersService.update(id, dto);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft-delete a chapter' })
-  remove(@Param('id') id: string) {
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.chaptersService.remove(id);
   }
 }

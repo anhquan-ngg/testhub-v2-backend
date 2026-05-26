@@ -151,7 +151,7 @@ export class AuthService {
   // LOGOUT
   async logout(userId: string) {
     await this.prisma.account.updateMany({
-      where: { user_id: userId, provider: 'local' },
+      where: { user_id: userId },
       data: { refresh_token_hash: null },
     });
   }
@@ -246,7 +246,7 @@ export class AuthService {
 
     const hash = this.encryption.hashToken(refreshToken);
     await this.prisma.account.updateMany({
-      where: { user_id: user.id, provider: 'local' },
+      where: { user_id: user.id },
       data: { refresh_token_hash: hash },
     });
 
@@ -271,20 +271,33 @@ export class AuthService {
     userId: string,
     rawRefreshToken: string,
   ): Promise<boolean> {
-    const account = await this.prisma.account.findUnique({
-      where: { user_id_provider: { user_id: userId, provider: 'local' } },
+    const accounts = await this.prisma.account.findMany({
+      where: {
+        user_id: userId,
+        refresh_token_hash: { not: null },
+      },
+      select: { refresh_token_hash: true },
     });
 
-    if (!account || !account.refresh_token_hash) {
+    if (accounts.length === 0) {
       return false;
     }
 
     const hash = this.encryption.hashToken(rawRefreshToken);
+    const hashBuffer = Buffer.from(hash);
 
-    return crypto.timingSafeEqual(
-      Buffer.from(hash),
-      Buffer.from(account.refresh_token_hash),
-    );
+    return accounts.some((account) => {
+      if (!account.refresh_token_hash) {
+        return false;
+      }
+
+      const storedBuffer = Buffer.from(account.refresh_token_hash);
+      if (storedBuffer.length !== hashBuffer.length) {
+        return false;
+      }
+
+      return crypto.timingSafeEqual(hashBuffer, storedBuffer);
+    });
   }
 
   // async validateOAuthTokenUser(payload: { token: string }): Promise<any> {

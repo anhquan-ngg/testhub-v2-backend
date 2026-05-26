@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { UsersRepository } from './users.repository';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -14,11 +15,18 @@ export class UsersService {
   constructor(private readonly usersRepository: UsersRepository) {}
 
   async create(dto: CreateUserDto) {
-    const existing = await this.usersRepository.findByEmail(dto.email);
-    if (existing) {
-      throw new ConflictException('Email already exists');
+    try {
+      return await this.usersRepository.create(dto);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('Email already exists');
+      }
+
+      throw error;
     }
-    return this.usersRepository.create(dto);
   }
 
   async findAll(query: QueryUserDto) {
