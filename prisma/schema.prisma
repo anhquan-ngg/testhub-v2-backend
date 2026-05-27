@@ -94,7 +94,7 @@ model User {
   address             String?
   accounts            Account[]
   exams               Exam[]
-  questions           Question[]
+  topics              Topic[]
   submissions         Submission[]
   registrations       ExamRegistration[]
   receivedNotifications Notification[]    @relation("ReceivedNotifications")
@@ -160,11 +160,16 @@ model Topic {
   deleted_at  DateTime?
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
+  created_by  String    @db.Uuid
   name        String
+
   exams       Exam[]
   chapters    Chapter[]
+  creator     User      @relation(fields: [created_by], references: [id], onDelete: Cascade)
 
   @@map("topics")
+
+  @@index([created_by])
 }
 
 model Chapter {
@@ -218,7 +223,6 @@ model Question {
   deleted_at       DateTime?
   created_at       DateTime             @default(now())
   updated_at       DateTime             @updatedAt
-  lecturer_id      String               @db.Uuid
   question_text    String
   chapter_id       String               @db.Uuid
   options          String?
@@ -228,12 +232,10 @@ model Question {
   submissions      SubmissionQuestions[]
   exams            ExamQuestions[]
   files            QuestionFiles[]
-  lecturer         User                 @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
   chapter          Chapter              @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
 
   @@map("questions")
 
-  @@index([lecturer_id])
   @@index([chapter_id])
   @@index([question_type, question_format])
 }
@@ -346,4 +348,3 @@ model Notification {
   @@index([recipient_id, is_read])
   @@index([created_at(sort: Desc)])
 }
-

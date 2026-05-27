@@ -36,8 +36,9 @@ export class ChaptersController {
   @Post()
   @ApiOperation({ summary: 'Create a new chapter' })
   @ApiResponse({ status: 201, description: 'Chapter created successfully.' })
-  create(@Body() dto: CreateChapterDto) {
-    return this.chaptersService.create(dto);
+  create(@Body() dto: CreateChapterDto, @Req() req: Request) {
+    const isAdmin = req.user?.role === 'ADMIN';
+    return this.chaptersService.create(dto, isAdmin);
   }
 
   @Get()

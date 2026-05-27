@@ -13,6 +13,7 @@ export class TopicsRepository {
 
   private readonly publicSelect = {
     id: true,
+    created_by: true,
     name: true,
     created_at: true,
     updated_at: true,
@@ -64,8 +65,10 @@ export class TopicsRepository {
     chapters: this.adminIncludeChapter.chapters,
   } satisfies Prisma.TopicSelect;
 
-  async create(dto: CreateTopicDto) {
-    return this.prisma.topic.create({ data: dto });
+  async create(createdBy: string, dto: CreateTopicDto) {
+    return this.prisma.topic.create({
+      data: { ...dto, created_by: createdBy },
+    });
   }
 
   async findMany(query: QueryTopicDto, isAdmin = false) {

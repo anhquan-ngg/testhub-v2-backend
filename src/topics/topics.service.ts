@@ -12,8 +12,12 @@ import { QueryTopicDto } from './dto/query-topic.dto';
 export class TopicsService {
   constructor(private readonly topicsRepository: TopicsRepository) {}
 
-  async create(dto: CreateTopicDto) {
-    return this.topicsRepository.create(dto);
+  async create(createdBy: string | undefined, dto: CreateTopicDto) {
+    if (!createdBy) {
+      throw new BadRequestException('User id is required');
+    }
+
+    return this.topicsRepository.create(createdBy, dto);
   }
 
   async findAll(query: QueryTopicDto, isAdmin = false) {

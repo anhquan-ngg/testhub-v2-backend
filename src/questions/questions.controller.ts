@@ -10,7 +10,6 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -33,10 +32,10 @@ export class QuestionsController {
   constructor(private readonly questionsService: QuestionsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a new question (lecturer_id from JWT)' })
+  @ApiOperation({ summary: 'Create a new question' })
   @ApiResponse({ status: 201, description: 'Question created successfully.' })
-  create(@Req() req: any, @Body() dto: CreateQuestionDto) {
-    return this.questionsService.create(req.user.id, dto);
+  create(@Body() dto: CreateQuestionDto) {
+    return this.questionsService.create(dto);
   }
 
   @Get()
@@ -46,7 +45,7 @@ export class QuestionsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a question by ID (includes chapter, lecturer, files)' })
+  @ApiOperation({ summary: 'Get a question by ID (includes chapter and files)' })
   @ApiResponse({ status: 404, description: 'Question not found.' })
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.questionsService.findOne(id);

@@ -8,8 +8,8 @@ import { QueryChapterDto } from './dto/query-chapter.dto';
 export class ChaptersService {
   constructor(private readonly chaptersRepository: ChaptersRepository) {}
 
-  async create(dto: CreateChapterDto) {
-    return this.chaptersRepository.create(dto);
+  async create(dto: CreateChapterDto, isAdmin = false) {
+    return this.chaptersRepository.create(dto, isAdmin);
   }
 
   async findAll(query: QueryChapterDto, isAdmin = false) {

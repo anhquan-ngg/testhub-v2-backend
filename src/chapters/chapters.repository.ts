@@ -25,8 +25,11 @@ export class ChaptersRepository {
     deleted_at: true,
   } satisfies Prisma.ChapterSelect;
 
-  async create(dto: CreateChapterDto) {
-    return this.prisma.chapter.create({ data: dto });
+  async create(dto: CreateChapterDto, isAdmin = false) {
+    return this.prisma.chapter.create({
+      data: dto,
+      select: isAdmin ? this.adminSelect : this.publicSelect,
+    });
   }
 
   async findMany(query: QueryChapterDto, isAdmin = false) {

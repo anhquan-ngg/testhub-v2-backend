@@ -9,20 +9,26 @@ import { Prisma } from '@prisma/client';
 export class QuestionsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(lecturerId: string, dto: CreateQuestionDto) {
+  async create(dto: CreateQuestionDto) {
     return this.prisma.question.create({
-      data: { ...dto, lecturer_id: lecturerId },
+      data: dto,
     });
   }
 
   async findMany(query: QueryQuestionDto) {
-    const { page = 1, limit = 10, chapter_id, lecturer_id, question_type, question_format, search } = query;
+    const {
+      page = 1,
+      limit = 10,
+      chapter_id,
+      question_type,
+      question_format,
+      search,
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.QuestionWhereInput = {
       is_deleted: false,
       ...(chapter_id && { chapter_id }),
-      ...(lecturer_id && { lecturer_id }),
       ...(question_type && { question_type }),
       ...(question_format && { question_format }),
       ...(search && { question_text: { contains: search, mode: 'insensitive' } }),
@@ -34,7 +40,7 @@ export class QuestionsRepository {
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
-        include: { chapter: true, lecturer: { select: { id: true, full_name: true, email: true } } },
+        include: { chapter: true },
       }),
       this.prisma.question.count({ where }),
     ]);
@@ -47,7 +53,6 @@ export class QuestionsRepository {
       where: { id, is_deleted: false },
       include: {
         chapter: true,
-        lecturer: { select: { id: true, full_name: true, email: true } },
         files: { include: { file: true }, orderBy: { order: 'asc' } },
       },
     });

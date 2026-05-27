@@ -8,8 +8,8 @@ import { QueryQuestionDto } from './dto/query-question.dto';
 export class QuestionsService {
   constructor(private readonly questionsRepository: QuestionsRepository) {}
 
-  async create(lecturerId: string, dto: CreateQuestionDto) {
-    return this.questionsRepository.create(lecturerId, dto);
+  async create(dto: CreateQuestionDto) {
+    return this.questionsRepository.create(dto);
   }
 
   async findAll(query: QueryQuestionDto) {
