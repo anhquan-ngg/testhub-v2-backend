@@ -68,7 +68,8 @@ enum FileType {
 
 enum FileStatus {
   PENDING
-  AVAILABLE
+  ACTIVE
+  EXTERNAL
   DELETED
 }
 
@@ -308,7 +309,7 @@ model File {
   id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid 
   name          String
   url           String
-  s3_key        String
+  s3_key        String?
   type          FileType
   size          Int?
   entity_type   String?

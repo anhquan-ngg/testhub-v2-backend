@@ -16,6 +16,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { EncryptionService } from '@/encryption/encryption.service';
 import { ConfigService } from '@nestjs/config';
+import { FileStatus, FileType } from '@prisma/client';
 
 @Injectable({ scope: Scope.REQUEST })
 export class AuthService {
@@ -88,6 +89,7 @@ export class AuthService {
   async oauthLogin(oauthUser: {
     email: string;
     full_name: string;
+    avatar: string | null;
     provider: string;
     provider_id: string;
   }) {
@@ -114,12 +116,32 @@ export class AuthService {
 
     if (!user) {
       // 3.a New user -> Create user + create account
-      user = await this.prisma.user.create({
-        data: {
-          full_name: oauthUser.full_name,
-          email: oauthUser.email,
-          password: null,
-        },
+      user = await this.prisma.$transaction(async (tx) => {
+        const createdUser = await tx.user.create({
+          data: {
+            full_name: oauthUser.full_name,
+            email: oauthUser.email,
+            password: null,
+          },
+        });
+
+        if (oauthUser.avatar) {
+          await tx.file.create({
+            data: {
+              name: `${oauthUser.provider}-avatar`,
+              url: oauthUser.avatar,
+              s3_key: null,
+              type: FileType.IMAGE,
+              size: null,
+              entity_type: 'users',
+              entity_id: createdUser.id,
+              uploaded_by: createdUser.id,
+              status: FileStatus.EXTERNAL,
+            },
+          });
+        }
+
+        return createdUser;
       });
     }
     // 3.b Existing user (local account) -> link OAuth account

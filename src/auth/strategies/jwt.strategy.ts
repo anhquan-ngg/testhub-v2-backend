@@ -40,7 +40,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
           where: {
             entity_type: 'users',
             entity_id: payload.sub,
-            status: 'AVAILABLE',
+            status: {
+              in: ['ACTIVE', 'EXTERNAL'],
+            },
           },
           orderBy: { uploaded_at: 'desc' },
           take: 1,

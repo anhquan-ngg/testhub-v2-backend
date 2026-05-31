@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { TopicsRepository } from './topics.repository';
 import { CreateTopicDto } from './dto/create-topic.dto';
@@ -14,7 +15,7 @@ export class TopicsService {
 
   async create(createdBy: string | undefined, dto: CreateTopicDto) {
     if (!createdBy) {
-      throw new BadRequestException('User id is required');
+      throw new UnauthorizedException('User id is required');
     }
 
     return this.topicsRepository.create(createdBy, dto);

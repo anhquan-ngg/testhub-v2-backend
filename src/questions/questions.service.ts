@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { QuestionsRepository } from './questions.repository';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
@@ -8,8 +12,28 @@ import { QueryQuestionDto } from './dto/query-question.dto';
 export class QuestionsService {
   constructor(private readonly questionsRepository: QuestionsRepository) {}
 
-  async create(dto: CreateQuestionDto) {
-    return this.questionsRepository.create(dto);
+  async create(userId: string, dto: CreateQuestionDto) {
+    const chapter = await this.questionsRepository.findChapterById(
+      dto.chapter_id,
+    );
+    if (!chapter) {
+      throw new BadRequestException('Chapter does not exist');
+    }
+
+    if (dto.file_ids?.length) {
+      const files = await this.questionsRepository.findActiveFilesByIds(
+        dto.file_ids.map((file) => file.id),
+        userId,
+      );
+
+      if (files.length !== dto.file_ids.length) {
+        throw new BadRequestException(
+          'All file_ids must exist, be ACTIVE, and belong to the current user',
+        );
+      }
+    }
+
+    return this.questionsRepository.create(userId, dto);
   }
 
   async findAll(query: QueryQuestionDto) {

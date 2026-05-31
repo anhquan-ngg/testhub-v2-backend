@@ -22,7 +22,7 @@ export class FilesRepository {
         type: dto.type,
         size: dto.size,
         entity_type: dto.entity_type,
-        entity_id: dto.entity_id,
+        entity_id: dto.entity_id ?? null,
         uploaded_by: uploadedBy,
         status: FileStatus.PENDING,
       },
@@ -30,7 +30,14 @@ export class FilesRepository {
   }
 
   async findMany(uploadedBy: string, query: QueryFileDto) {
-    const { page = 1, limit = 10, type, status, entity_type, entity_id } = query;
+    const {
+      page = 1,
+      limit = 10,
+      type,
+      status,
+      entity_type,
+      entity_id,
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.FileWhereInput = {
@@ -64,14 +71,14 @@ export class FilesRepository {
     });
   }
 
-  markAvailable(id: string, uploadedBy: string) {
+  markActive(id: string, uploadedBy: string) {
     return this.prisma.file.updateMany({
       where: {
         id,
         uploaded_by: uploadedBy,
         status: { not: FileStatus.DELETED },
       },
-      data: { status: FileStatus.AVAILABLE },
+      data: { status: FileStatus.ACTIVE },
     });
   }
 

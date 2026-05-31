@@ -3,15 +3,63 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { QueryQuestionDto } from './dto/query-question.dto';
-import { Prisma } from '@prisma/client';
+import { FileStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class QuestionsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateQuestionDto) {
-    return this.prisma.question.create({
-      data: dto,
+  async create(userId: string, dto: CreateQuestionDto) {
+    const { file_ids: fileIds = [], ...questionData } = dto;
+
+    const question = await this.prisma.$transaction(async (tx) => {
+      const createdQuestion = await tx.question.create({
+        data: questionData,
+      });
+
+      if (fileIds.length) {
+        await tx.questionFiles.createMany({
+          data: fileIds.map((file) => ({
+            question_id: createdQuestion.id,
+            file_id: file.id,
+            order: file.order,
+          })),
+        });
+
+        await tx.file.updateMany({
+          where: {
+            id: { in: fileIds.map((file) => file.id) },
+            uploaded_by: userId,
+            status: FileStatus.ACTIVE,
+          },
+          data: {
+            entity_type: 'questions',
+            entity_id: createdQuestion.id,
+          },
+        });
+      }
+
+      return createdQuestion;
+    });
+
+    return this.findById(question.id);
+  }
+
+  async findChapterById(id: string) {
+    return this.prisma.chapter.findFirst({
+      where: { id, is_deleted: false },
+      select: { id: true },
+    });
+  }
+
+  async findActiveFilesByIds(ids: string[], uploadedBy: string) {
+    return this.prisma.file.findMany({
+      where: {
+        id: { in: ids },
+        uploaded_by: uploadedBy,
+        status: FileStatus.ACTIVE,
+      },
+      select: { id: true },
     });
   }
 
@@ -31,7 +79,9 @@ export class QuestionsRepository {
       ...(chapter_id && { chapter_id }),
       ...(question_type && { question_type }),
       ...(question_format && { question_format }),
-      ...(search && { question_text: { contains: search, mode: 'insensitive' } }),
+      ...(search && {
+        question_text: { contains: search, mode: 'insensitive' },
+      }),
     };
 
     const [data, total] = await Promise.all([
