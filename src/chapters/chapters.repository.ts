@@ -100,9 +100,47 @@ export class ChaptersRepository {
   }
 
   async softDelete(id: string) {
-    return this.prisma.chapter.update({
-      where: { id },
-      data: { is_deleted: true, deleted_at: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const deletedAt = new Date();
+      const chaptersToDelete = new Set<string>([id]);
+      let parentIds = [id];
+
+      while (parentIds.length) {
+        const children = await tx.chapter.findMany({
+          where: {
+            parent_id: { in: parentIds },
+            is_deleted: false,
+          },
+          select: { id: true },
+        });
+        parentIds = children
+          .map((chapter) => chapter.id)
+          .filter((chapterId) => !chaptersToDelete.has(chapterId));
+        parentIds.forEach((chapterId) => chaptersToDelete.add(chapterId));
+      }
+
+      const chapterIds = Array.from(chaptersToDelete);
+
+      const chapters = await tx.chapter.updateMany({
+        where: {
+          id: { in: chapterIds },
+          is_deleted: false,
+        },
+        data: { is_deleted: true, deleted_at: deletedAt },
+      });
+
+      const questions = await tx.question.updateMany({
+        where: {
+          chapter_id: { in: chapterIds },
+          is_deleted: false,
+        },
+        data: { is_deleted: true, deleted_at: deletedAt },
+      });
+
+      return {
+        chapters,
+        questions,
+      };
     });
   }
 }

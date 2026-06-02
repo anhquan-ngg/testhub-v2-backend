@@ -108,14 +108,100 @@ export class QuestionsRepository {
     });
   }
 
-  async update(id: string, dto: UpdateQuestionDto) {
-    return this.prisma.question.update({ where: { id }, data: dto });
+  async update(userId: string, id: string, dto: UpdateQuestionDto) {
+    const { file_ids: fileIds, ...questionData } = dto;
+
+    const question = await this.prisma.$transaction(async (tx) => {
+      const updatedQuestion = await tx.question.update({
+        where: { id },
+        data: questionData,
+      });
+
+      if (fileIds !== undefined) {
+        const existingQuestionFiles = await tx.questionFiles.findMany({
+          where: { question_id: id },
+          select: { file_id: true },
+        });
+        const oldFileIds = existingQuestionFiles.map((file) => file.file_id);
+        const newFileIds = fileIds.map((file) => file.id);
+        const newFileIdSet = new Set(newFileIds);
+        const oldFileIdsToDelete = oldFileIds.filter(
+          (fileId) => !newFileIdSet.has(fileId),
+        );
+
+        if (oldFileIdsToDelete.length) {
+          await tx.file.updateMany({
+            where: {
+              id: { in: oldFileIdsToDelete },
+              uploaded_by: userId,
+              status: { not: FileStatus.DELETED },
+            },
+            data: {
+              status: FileStatus.DELETED,
+            },
+          });
+        }
+
+        await tx.questionFiles.deleteMany({
+          where: { question_id: id },
+        });
+
+        if (fileIds.length) {
+          await tx.questionFiles.createMany({
+            data: fileIds.map((file) => ({
+              question_id: id,
+              file_id: file.id,
+              order: file.order,
+            })),
+          });
+
+          await tx.file.updateMany({
+            where: {
+              id: { in: newFileIds },
+              uploaded_by: userId,
+              status: FileStatus.ACTIVE,
+            },
+            data: {
+              entity_type: 'questions',
+              entity_id: id,
+            },
+          });
+        }
+      }
+
+      return updatedQuestion;
+    });
+
+    return this.findById(question.id);
   }
 
   async softDelete(id: string) {
-    return this.prisma.question.update({
-      where: { id },
-      data: { is_deleted: true, deleted_at: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const deletedAt = new Date();
+      const questionFiles = await tx.questionFiles.findMany({
+        where: { question_id: id },
+        select: { file_id: true },
+      });
+      const fileIds = questionFiles.map((item) => item.file_id);
+
+      const question = await tx.question.update({
+        where: { id },
+        data: { is_deleted: true, deleted_at: deletedAt },
+      });
+
+      if (fileIds.length) {
+        await tx.file.updateMany({
+          where: {
+            id: { in: fileIds },
+            status: { not: FileStatus.DELETED },
+          },
+          data: {
+            status: FileStatus.DELETED,
+          },
+        });
+      }
+
+      return question;
     });
   }
 }

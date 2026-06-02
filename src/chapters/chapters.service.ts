@@ -31,7 +31,11 @@ export class ChaptersService {
 
   async remove(id: string) {
     await this.findOne(id);
-    await this.chaptersRepository.softDelete(id);
-    return { message: 'Chapter deleted successfully' };
+    const result = await this.chaptersRepository.softDelete(id);
+    return {
+      message: 'Chapter, child chapters, and questions deleted successfully',
+      chapters: result.chapters.count,
+      questions: result.questions.count,
+    };
   }
 }

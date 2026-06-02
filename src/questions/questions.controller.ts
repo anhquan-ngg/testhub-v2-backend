@@ -57,10 +57,11 @@ export class QuestionsController {
   @Patch(':id')
   @ApiOperation({ summary: 'Update a question' })
   update(
+    @Req() req: any,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateQuestionDto,
   ) {
-    return this.questionsService.update(id, dto);
+    return this.questionsService.update(req.user.id, id, dto);
   }
 
   @Delete(':id')

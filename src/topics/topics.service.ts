@@ -52,7 +52,11 @@ export class TopicsService {
       throw new BadRequestException('Topic has already been deleted');
     }
 
-    return { message: 'Topic deleted successfully' };
+    return {
+      message: 'Topic, chapters, child chapters, and questions deleted successfully',
+      chapters: result.chapters.count,
+      questions: result.questions.count,
+    };
   }
 
   private async assertTopicCanBeModified(id: string) {

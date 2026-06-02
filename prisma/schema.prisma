@@ -210,6 +210,7 @@ model Submission {
   questions     SubmissionQuestions[]
   exam          Exam                 @relation(fields: [exam_id], references: [id], onDelete: Cascade)
   student       User                 @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  session       ExamSession?
 
   @@map("submissions")
 
@@ -265,6 +266,18 @@ model ExamQuestions {
 
   @@unique([exam_id, question_id])
   @@map("exam_questions")
+}
+
+model ExamSession {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submission_id String     @unique @db.Uuid
+  entered_at    DateTime   @default(now())
+  last_ping     DateTime   @default(now())
+  is_active     Boolean    @default(true)
+  submission    Submission @relation(fields: [submission_id], references: [id])
+
+  @@map("exam_sessions")
+  @@index([is_active])
 }
 
 model SubmissionQuestions {
