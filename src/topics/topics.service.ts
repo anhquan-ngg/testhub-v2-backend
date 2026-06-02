@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { TopicsRepository } from './topics.repository';
 import { CreateTopicDto } from './dto/create-topic.dto';
@@ -12,8 +13,12 @@ import { QueryTopicDto } from './dto/query-topic.dto';
 export class TopicsService {
   constructor(private readonly topicsRepository: TopicsRepository) {}
 
-  async create(dto: CreateTopicDto) {
-    return this.topicsRepository.create(dto);
+  async create(createdBy: string | undefined, dto: CreateTopicDto) {
+    if (!createdBy) {
+      throw new UnauthorizedException('User id is required');
+    }
+
+    return this.topicsRepository.create(createdBy, dto);
   }
 
   async findAll(query: QueryTopicDto, isAdmin = false) {
@@ -47,7 +52,11 @@ export class TopicsService {
       throw new BadRequestException('Topic has already been deleted');
     }
 
-    return { message: 'Topic deleted successfully' };
+    return {
+      message: 'Topic, chapters, child chapters, and questions deleted successfully',
+      chapters: result.chapters.count,
+      questions: result.questions.count,
+    };
   }
 
   private async assertTopicCanBeModified(id: string) {

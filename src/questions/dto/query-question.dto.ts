@@ -32,11 +32,6 @@ export class QueryQuestionDto {
   @IsUUID()
   chapter_id?: string;
 
-  @ApiPropertyOptional({ example: 'uuid-of-lecturer' })
-  @IsOptional()
-  @IsUUID()
-  lecturer_id?: string;
-
   @ApiPropertyOptional({ enum: QuestionType })
   @IsOptional()
   @IsEnum(QuestionType)

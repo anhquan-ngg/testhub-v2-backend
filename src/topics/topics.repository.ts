@@ -13,6 +13,7 @@ export class TopicsRepository {
 
   private readonly publicSelect = {
     id: true,
+    created_by: true,
     name: true,
     created_at: true,
     updated_at: true,
@@ -64,8 +65,10 @@ export class TopicsRepository {
     chapters: this.adminIncludeChapter.chapters,
   } satisfies Prisma.TopicSelect;
 
-  async create(dto: CreateTopicDto) {
-    return this.prisma.topic.create({ data: dto });
+  async create(createdBy: string, dto: CreateTopicDto) {
+    return this.prisma.topic.create({
+      data: { ...dto, created_by: createdBy },
+    });
   }
 
   async findMany(query: QueryTopicDto, isAdmin = false) {
@@ -120,9 +123,64 @@ export class TopicsRepository {
   }
 
   async softDelete(id: string) {
-    return this.prisma.topic.updateMany({
-      where: { id, is_deleted: false },
-      data: { is_deleted: true, deleted_at: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      const deletedAt = new Date();
+      const topic = await tx.topic.updateMany({
+        where: { id, is_deleted: false },
+        data: { is_deleted: true, deleted_at: deletedAt },
+      });
+
+      if (topic.count === 0) {
+        return {
+          count: 0,
+          chapters: { count: 0 },
+          questions: { count: 0 },
+        };
+      }
+
+      const chapterRows = await tx.$queryRaw<{ id: string }[]>`
+        WITH RECURSIVE chapter_tree AS (
+          SELECT c.id
+          FROM "chapters" c
+          WHERE c."topic_id" = CAST(${id} AS uuid)
+            AND c."is_deleted" = false
+
+          UNION
+
+          SELECT child.id
+          FROM "chapters" child
+          INNER JOIN chapter_tree parent ON child."parent_id" = parent.id
+          WHERE child."is_deleted" = false
+        )
+        SELECT id FROM chapter_tree
+      `;
+      const chapterIds = chapterRows.map((chapter) => chapter.id);
+
+      const chapters = chapterIds.length
+        ? await tx.chapter.updateMany({
+            where: {
+              id: { in: chapterIds },
+              is_deleted: false,
+            },
+            data: { is_deleted: true, deleted_at: deletedAt },
+          })
+        : { count: 0 };
+
+      const questions = chapterIds.length
+        ? await tx.question.updateMany({
+            where: {
+              is_deleted: false,
+              chapter_id: { in: chapterIds },
+            },
+            data: { is_deleted: true, deleted_at: deletedAt },
+          })
+        : { count: 0 };
+
+      return {
+        count: topic.count,
+        chapters,
+        questions,
+      };
     });
   }
 }

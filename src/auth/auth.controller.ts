@@ -139,19 +139,6 @@ export class AuthController {
     res.redirect(this.config.get('FRONTEND_URL') ?? '/');
   }
 
-  // @UseGuards(JwtGuard)
-  // @Get('me')
-  // @ApiBearerAuth()
-  // @ApiOperation({ summary: 'Get current user information' })
-  // @ApiResponse({
-  //   status: 200,
-  //   description: 'User information retrieved successfully.',
-  // })
-  // @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-  // getCurrentUser(@Req() req: any) {
-  //   return req.user || null;
-  // }
-
   @UseGuards(JwtGuard)
   @HttpCode(HttpStatus.OK)
   @Post('change-password')

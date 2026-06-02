@@ -8,8 +8,8 @@ import { QueryChapterDto } from './dto/query-chapter.dto';
 export class ChaptersService {
   constructor(private readonly chaptersRepository: ChaptersRepository) {}
 
-  async create(dto: CreateChapterDto) {
-    return this.chaptersRepository.create(dto);
+  async create(dto: CreateChapterDto, isAdmin = false) {
+    return this.chaptersRepository.create(dto, isAdmin);
   }
 
   async findAll(query: QueryChapterDto, isAdmin = false) {
@@ -31,7 +31,11 @@ export class ChaptersService {
 
   async remove(id: string) {
     await this.findOne(id);
-    await this.chaptersRepository.softDelete(id);
-    return { message: 'Chapter deleted successfully' };
+    const result = await this.chaptersRepository.softDelete(id);
+    return {
+      message: 'Chapter, child chapters, and questions deleted successfully',
+      chapters: result.chapters.count,
+      questions: result.questions.count,
+    };
   }
 }

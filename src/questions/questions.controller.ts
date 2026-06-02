@@ -33,7 +33,7 @@ export class QuestionsController {
   constructor(private readonly questionsService: QuestionsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a new question (lecturer_id from JWT)' })
+  @ApiOperation({ summary: 'Create a new question' })
   @ApiResponse({ status: 201, description: 'Question created successfully.' })
   create(@Req() req: any, @Body() dto: CreateQuestionDto) {
     return this.questionsService.create(req.user.id, dto);
@@ -46,7 +46,9 @@ export class QuestionsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a question by ID (includes chapter, lecturer, files)' })
+  @ApiOperation({
+    summary: 'Get a question by ID (includes chapter and files)',
+  })
   @ApiResponse({ status: 404, description: 'Question not found.' })
   findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.questionsService.findOne(id);
@@ -55,10 +57,11 @@ export class QuestionsController {
   @Patch(':id')
   @ApiOperation({ summary: 'Update a question' })
   update(
+    @Req() req: any,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateQuestionDto,
   ) {
-    return this.questionsService.update(id, dto);
+    return this.questionsService.update(req.user.id, id, dto);
   }
 
   @Delete(':id')

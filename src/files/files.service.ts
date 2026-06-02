@@ -45,23 +45,39 @@ export class FilesService {
 
   async confirmUploaded(uploadedBy: string, id: string) {
     const file = await this.findOne(uploadedBy, id);
+    if (!file.s3_key) {
+      throw new BadRequestException('File is missing storage key');
+    }
+
     const exists = await this.s3Service.checkExists(file.s3_key);
 
     if (!exists) {
       throw new BadRequestException('File does not exist on S3 yet');
     }
 
-    await this.filesRepository.markAvailable(id, uploadedBy);
+    await this.filesRepository.markActive(id, uploadedBy);
     return this.findOne(uploadedBy, id);
   }
 
   async createDownloadUrl(uploadedBy: string, id: string) {
     const file = await this.findAvailableFile(uploadedBy, id);
+    if (file.status === FileStatus.EXTERNAL) {
+      return { url: file.url };
+    }
+    if (!file.s3_key) {
+      throw new BadRequestException('File is missing storage key');
+    }
     return this.s3Service.createDownloadUrl(file.s3_key);
   }
 
   async createViewUrl(uploadedBy: string, id: string) {
     const file = await this.findAvailableFile(uploadedBy, id);
+    if (file.status === FileStatus.EXTERNAL) {
+      return { url: file.url };
+    }
+    if (!file.s3_key) {
+      throw new BadRequestException('File is missing storage key');
+    }
     return this.s3Service.getViewUrl(file.s3_key);
   }
 
@@ -69,10 +85,12 @@ export class FilesService {
     const file = await this.findOne(uploadedBy, id);
     await this.filesRepository.softDelete(id, uploadedBy);
     try {
-      await this.s3Service.remove(file.s3_key);
+      if (file.s3_key) {
+        await this.s3Service.remove(file.s3_key);
+      }
     } catch (error) {
       // Revert soft-delete if S3 removal fails, keeping consistency
-      await this.filesRepository.markAvailable(id, uploadedBy);
+      await this.filesRepository.markActive(id, uploadedBy);
       throw error;
     }
 
@@ -82,7 +100,10 @@ export class FilesService {
   private async findAvailableFile(uploadedBy: string, id: string) {
     const file = await this.findOne(uploadedBy, id);
 
-    if (file.status !== FileStatus.AVAILABLE) {
+    if (
+      file.status !== FileStatus.ACTIVE &&
+      file.status !== FileStatus.EXTERNAL
+    ) {
       throw new BadRequestException('File is not available yet');
     }
 

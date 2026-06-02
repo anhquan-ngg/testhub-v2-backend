@@ -35,8 +35,8 @@ export class TopicsController {
   @Post()
   @ApiOperation({ summary: 'Create a new topic' })
   @ApiResponse({ status: 201, description: 'Topic created successfully.' })
-  create(@Body() dto: CreateTopicDto) {
-    return this.topicsService.create(dto);
+  create(@Body() dto: CreateTopicDto, @Req() req: Request) {
+    return this.topicsService.create(req.user?.id, dto);
   }
 
   @Get()
@@ -54,11 +54,12 @@ export class TopicsController {
     return this.topicsService.findOne(id, isAdmin);
   }
 
-  @Patch(':id')
-  @ApiOperation({ summary: 'Update a topic' })
-  update(@Param('id') id: string, @Body() dto: UpdateTopicDto) {
-    return this.topicsService.update(id, dto);
-  }
+  // DEPRECATED: Update endpoint is not needed for now, as only the name can be updated and it is not a critical feature. We can reintroduce this endpoint in the future if needed.
+  // @Patch(':id')
+  // @ApiOperation({ summary: 'Update a topic' })
+  // update(@Param('id') id: string, @Body() dto: UpdateTopicDto) {
+  //   return this.topicsService.update(id, dto);
+  // }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
