@@ -1,52 +1,99 @@
-// import {
-//   Body,
-//   Controller,
-//   HttpCode,
-//   HttpStatus,
-//   Post,
-//   UseGuards,
-// } from '@nestjs/common';
-// import { SubmissionService } from './submission.service';
-// import { JwtAuthGuard } from '@/auth/guards/jwt.guard';
-// import { ApiBearerAuth, ApiOperation, ApiResponse } from '@nestjs/swagger';
-// import { StartExamDto } from './dto/start-exam.dto';
-// import { SubmitQuestionDto } from './dto/submit-question.dto';
-// import { SubmitExamDto } from './dto/submit-exam.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { SubmissionService } from './submission.service';
+import { JwtGuard } from '@/auth/guards/jwt.guard';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { StartExamDto } from './dto/start-exam.dto';
+import { SubmitQuestionDto } from './dto/submit-question.dto';
+import { SubmitExamDto } from './dto/submit-exam.dto';
+import { CreateSubmissionDto } from './dto/create-submission.dto';
+import { QuerySubmissionDto } from './dto/query-submission.dto';
+import { UpdateSubmissionDto } from './dto/update-submission.dto';
 
-// @Controller('submission')
-// export class SubmissionController {
-//   constructor(private readonly submissionService: SubmissionService) {}
+@ApiTags('Submissions')
+@ApiBearerAuth()
+@UseGuards(JwtGuard)
+@Controller('submission')
+export class SubmissionController {
+  constructor(private readonly submissionService: SubmissionService) {}
 
-//   @UseGuards(JwtAuthGuard)
-//   @HttpCode(HttpStatus.OK)
-//   @Post('/start-exam')
-//   @ApiBearerAuth()
-//   @ApiOperation({ summary: 'Start an exam' })
-//   @ApiResponse({ status: 200, description: 'Exam started successfully.' })
-//   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-//   async startExam(@Body() startExamDto: StartExamDto) {
-//     return this.submissionService.startExam(startExamDto);
-//   }
+  @Post()
+  @ApiOperation({ summary: 'Create a submission' })
+  @ApiResponse({ status: 201, description: 'Submission created successfully.' })
+  create(@Body() dto: CreateSubmissionDto) {
+    return this.submissionService.create(dto);
+  }
 
-//   @UseGuards(JwtAuthGuard)
-//   @HttpCode(HttpStatus.OK)
-//   @Post('/submit-by-question')
-//   @ApiBearerAuth()
-//   @ApiOperation({ summary: 'Submit a question of exam' })
-//   @ApiResponse({ status: 200, description: 'Question submitted successfully.' })
-//   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-//   async submitQuestion(@Body() submitQuestionDto: SubmitQuestionDto) {
-//     return this.submissionService.submitByQuestion(submitQuestionDto);
-//   }
+  @Get()
+  @ApiOperation({ summary: 'Get submissions with pagination and filters' })
+  findAll(@Query() query: QuerySubmissionDto) {
+    return this.submissionService.findAll(query);
+  }
 
-//   @UseGuards(JwtAuthGuard)
-//   @HttpCode(HttpStatus.OK)
-//   @Post('/submit-exam')
-//   @ApiBearerAuth()
-//   @ApiOperation({ summary: 'Submit an exam' })
-//   @ApiResponse({ status: 200, description: 'Exam submitted successfully.' })
-//   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-//   async submitExam(@Body() submitExamDto: SubmitExamDto) {
-//     return this.submissionService.submitByExam(submitExamDto);
-//   }
-// }
+  @Get(':id')
+  @ApiOperation({ summary: 'Get a submission by ID' })
+  @ApiResponse({ status: 404, description: 'Submission not found.' })
+  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.submissionService.findOne(id);
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Update a submission' })
+  update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateSubmissionDto,
+  ) {
+    return this.submissionService.update(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Soft-delete a submission' })
+  remove(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.submissionService.remove(id);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('/start-exam')
+  @ApiOperation({ summary: 'Start an exam' })
+  @ApiResponse({ status: 200, description: 'Exam started successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
+  async startExam(@Body() startExamDto: StartExamDto) {
+    return this.submissionService.startExam(startExamDto);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('/submit-by-question')
+  @ApiOperation({ summary: 'Submit a question of exam' })
+  @ApiResponse({ status: 200, description: 'Question submitted successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
+  async submitQuestion(@Body() submitQuestionDto: SubmitQuestionDto) {
+    return this.submissionService.submitByQuestion(submitQuestionDto);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('/submit-exam')
+  @ApiOperation({ summary: 'Submit an exam' })
+  @ApiResponse({ status: 200, description: 'Exam submitted successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
+  async submitExam(@Body() submitExamDto: SubmitExamDto) {
+    return this.submissionService.submitByExam(submitExamDto);
+  }
+}

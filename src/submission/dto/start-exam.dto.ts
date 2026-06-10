@@ -1,11 +1,11 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsUUID } from 'class-validator';
 
 export class StartExamDto {
   @IsNotEmpty()
-  @IsString()
+  @IsUUID()
   examId: string;
 
   @IsNotEmpty()
-  @IsString()
+  @IsUUID()
   studentId: string;
 }

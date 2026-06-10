@@ -1,19 +1,21 @@
-import { IsDate, IsNotEmpty, IsNumber, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsNotEmpty, IsNumber, IsUUID } from 'class-validator';
 
 export class SubmitExamDto {
   @IsNotEmpty()
-  @IsString()
+  @IsUUID()
   submission_id: string;
 
   @IsNotEmpty()
-  @IsDate()
-  start_time: Date;
+  @IsDateString()
+  start_time: string;
 
   @IsNotEmpty()
-  @IsString()
+  @IsDateString()
   end_time: string;
 
   @IsNotEmpty()
+  @Type(() => Number)
   @IsNumber()
   question_length: number;
 }
