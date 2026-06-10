@@ -14,6 +14,8 @@ import { ChaptersModule } from './chapters/chapters.module';
 import { QuestionsModule } from './questions/questions.module';
 import { ExamsModule } from './exams/exams.module';
 import { FilesModule } from './files/files.module';
+import { ExamRegistrationsModule } from './exam-registrations/exam-registrations.module';
+import { SubmissionModule } from './submission/submission.module';
 
 @Module({
   imports: [
@@ -24,13 +26,14 @@ import { FilesModule } from './files/files.module';
     AuthModule,
     PrismaModule,
     S3Module,
-    // SubmissionModule,
+    SubmissionModule,
     // NotificationModule,
     UsersModule,
     TopicsModule,
     ChaptersModule,
     QuestionsModule,
     ExamsModule,
+    ExamRegistrationsModule,
     FilesModule,
   ],
   controllers: [AppController],

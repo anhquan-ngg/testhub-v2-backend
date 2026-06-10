@@ -1,12 +1,12 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class SubmitQuestionDto {
   @IsNotEmpty()
-  @IsString()
+  @IsUUID()
   submission_id: string;
 
   @IsNotEmpty()
-  @IsString()
+  @IsUUID()
   question_id: string;
 
   @IsOptional()
