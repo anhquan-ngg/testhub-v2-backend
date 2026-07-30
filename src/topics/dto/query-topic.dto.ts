@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class QueryTopicDto {
   @ApiPropertyOptional({ example: 1 })
@@ -21,4 +21,12 @@ export class QueryTopicDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    description: 'Filter topics created by a specific user',
+  })
+  @IsOptional()
+  @IsUUID()
+  created_by?: string;
 }

@@ -6,9 +6,10 @@ import { PdfService } from './pdf.service';
 import { ExamReportService } from './exam-report.service';
 import { PrismaModule } from '@/prisma/prisma.module';
 import { SubmissionRepository } from './submission.repository';
+import { ExamRuntimeModule } from '@/exam-runtime/exam-runtime.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ExamRuntimeModule],
   controllers: [SubmissionController, PdfController],
   providers: [
     SubmissionService,

@@ -43,7 +43,11 @@ export class TopicsController {
   @ApiOperation({ summary: 'Get all topics with pagination' })
   findAll(@Query() query: QueryTopicDto, @Req() req: Request) {
     const isAdmin = req.user?.role === 'ADMIN';
-    return this.topicsService.findAll(query, isAdmin);
+    const effectiveQuery = isAdmin
+      ? query
+      : { ...query, created_by: req.user?.id };
+
+    return this.topicsService.findAll(effectiveQuery, isAdmin);
   }
 
   @Get(':id')

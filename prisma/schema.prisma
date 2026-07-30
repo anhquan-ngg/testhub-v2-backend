@@ -211,6 +211,8 @@ model Submission {
   @@index([exam_id])
   @@index([student_id])
   @@index([status])
+  /// Note: Partial unique index "submissions_active_exam_student_unique" on ("exam_id", "student_id")
+  /// WHERE "is_deleted" = false AND "status" = 'IN_PROGRESS' is managed via custom SQL migration.
   @@map("submissions")
 }
 

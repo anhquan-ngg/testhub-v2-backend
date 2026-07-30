@@ -72,7 +72,7 @@ export class TopicsRepository {
   }
 
   async findMany(query: QueryTopicDto, isAdmin = false) {
-    const { search } = query;
+    const { search, created_by } = query;
     const page = Math.max(Number(query.page) || 1, 1);
     const limit = Math.min(
       Math.max(Number(query.limit) || 10, 1),
@@ -82,6 +82,7 @@ export class TopicsRepository {
 
     const where: Prisma.TopicWhereInput = {
       ...(!isAdmin && { is_deleted: false }),
+      ...(created_by && { created_by }),
       ...(search && { name: { contains: search, mode: 'insensitive' } }),
     };
 

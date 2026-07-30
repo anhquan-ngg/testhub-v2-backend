@@ -12,6 +12,7 @@ import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { QuerySubmissionDto } from './dto/query-submission.dto';
 import { UpdateSubmissionDto } from './dto/update-submission.dto';
 import { SubmissionRepository } from './submission.repository';
+import { ExamRuntimeService } from '@/exam-runtime/exam-runtime.service';
 
 type ExamDistributionItem = {
   question_type: string;
@@ -37,6 +38,7 @@ export class SubmissionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly submissionRepository: SubmissionRepository,
+    private readonly examRuntimeService: ExamRuntimeService,
   ) {}
 
   async create(dto: CreateSubmissionDto) {
@@ -73,142 +75,18 @@ export class SubmissionService {
   }
 
   async startExam(startExamDto: StartExamDto) {
-    const examData = await this.prisma.exam.findFirst({
-      where: {
-        id: startExamDto.examId,
-        is_deleted: false,
-      },
-    });
+    return this.examRuntimeService.startExam(
+      startExamDto.examId,
+      startExamDto.studentId,
+    );
+  }
 
-    if (!examData) {
-      throw new NotFoundException('Exam not found');
-    }
+  async startExamForUser(examId: string, studentId: string) {
+    return this.examRuntimeService.startExam(examId, studentId);
+  }
 
-    let questions;
-    if (examData.mode === 'MANUAL') {
-      const examQuestions = await this.prisma.examQuestions.findMany({
-        where: {
-          exam_id: startExamDto.examId,
-        },
-        include: {
-          question: {
-            select: {
-              id: true,
-              question_text: true,
-              options: true,
-              question_type: true,
-              question_format: true,
-            },
-          },
-        },
-      });
-      questions = examQuestions.map((eq) => eq.question);
-    } else if (examData.mode === 'RANDOM_N') {
-      // Use raw SQL for random ordering since Prisma doesn't support it directly
-      questions = await this.prisma.$queryRaw<ExamQuestionRow[]>`
-        SELECT
-          q.id,
-          q.question_text,
-          q.options,
-          q.question_type,
-          q.question_format
-        FROM "questions" AS q
-        INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-        WHERE c.topic_id = ${examData.topic_id}
-          AND c.is_deleted = false
-          AND q.is_deleted = false
-        ORDER BY RANDOM()
-        LIMIT ${examData.sample_size}
-      `;
-      this.assertEnoughQuestions(
-        questions.length,
-        examData.sample_size,
-        'RANDOM_N',
-      );
-    } else if (examData.mode === 'BY_TYPE') {
-      questions = [];
-      if (examData.distribution) {
-        const parsedDistribution = JSON.parse(
-          examData.distribution,
-        ) as ExamDistributionItem[];
-        for (const distribution of parsedDistribution) {
-          const questionsData = await this.prisma.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
-            FROM "questions" AS q
-            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-            WHERE c.topic_id = ${examData.topic_id}
-              AND c.is_deleted = false
-              AND q.is_deleted = false
-              AND q.question_type::text = ${distribution.question_type}
-              AND q.question_format::text = ${distribution.question_format}
-            ORDER BY RANDOM()
-            LIMIT ${distribution.quantity}
-          `;
-
-          this.assertEnoughQuestions(
-            questionsData.length,
-            distribution.quantity,
-            `BY_TYPE (${distribution.question_type}/${distribution.question_format})`,
-          );
-          questions.push(...questionsData);
-        }
-      }
-    } else if (examData.mode === 'BY_CHAPTER') {
-      questions = [];
-      if (examData.distribution) {
-        const parsedDistribution = JSON.parse(
-          examData.distribution,
-        ) as ExamChapterDistributionItem[];
-        for (const distribution of parsedDistribution) {
-          const questionsData = await this.prisma.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
-            FROM "questions" AS q
-            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-            WHERE c.topic_id = ${examData.topic_id}
-              AND c.is_deleted = false
-              AND q.is_deleted = false
-              AND (
-                q.chapter_id = ${distribution.chapter_id}
-                OR c.parent_id = ${distribution.chapter_id}
-              )
-            ORDER BY RANDOM()
-            LIMIT ${distribution.quantity}
-          `;
-
-          this.assertEnoughQuestions(
-            questionsData.length,
-            distribution.quantity,
-            `BY_CHAPTER (${distribution.chapter_id})`,
-          );
-          questions.push(...questionsData);
-        }
-      }
-    }
-
-    const submission = await this.prisma.submission.create({
-      data: {
-        exam_id: startExamDto.examId,
-        student_id: startExamDto.studentId,
-      },
-    });
-
-    return {
-      data: {
-        ...examData,
-        questions: questions,
-        submissionId: submission.id,
-      },
-    };
+  async getExamSession(examId: string, studentId: string) {
+    return this.examRuntimeService.getSession(examId, studentId);
   }
 
   async submitByQuestion(submitQuestionDto: SubmitQuestionDto) {
@@ -340,52 +218,37 @@ export class SubmissionService {
     };
   }
 
-  async submitByExam(submitExamDto: SubmitExamDto) {
+  async submitByExam(submitExamDto: SubmitExamDto, studentId?: string) {
     if (!submitExamDto.submission_id) {
       throw new BadRequestException('Submission id is required');
     }
 
-    const submittedQuestions = await this.prisma.submissionQuestions.findMany({
-      where: {
-        submission_id: submitExamDto.submission_id,
-      },
-    });
+    if (
+      !submitExamDto.start_time ||
+      isNaN(Date.parse(submitExamDto.start_time))
+    ) {
+      throw new BadRequestException('Invalid start_time');
+    }
 
-    const totalScore =
-      (submittedQuestions.reduce(
-        (total: number, question) =>
-          total + (question.score ? Number(question.score) : 0),
-        0,
-      ) *
-        10) /
-      submitExamDto.question_length;
+    if (!submitExamDto.end_time || isNaN(Date.parse(submitExamDto.end_time))) {
+      throw new BadRequestException('Invalid end_time');
+    }
 
-    let rating: SubmissionRating;
+    const startTime = new Date(submitExamDto.start_time);
+    const endTime = new Date(submitExamDto.end_time);
 
-    if (totalScore >= 9) rating = 'EXCELLENT';
-    else if (totalScore >= 7) rating = 'GOOD';
-    else if (totalScore >= 5) rating = 'AVERAGE';
-    else rating = 'POOR';
+    if (endTime.getTime() < startTime.getTime()) {
+      throw new BadRequestException('end_time must be after start_time');
+    }
 
-    const submission = await this.prisma.submission.update({
-      where: {
-        id: submitExamDto.submission_id,
-      },
-      data: {
-        total_score: totalScore,
-        rating,
-        start_time: new Date(submitExamDto.start_time),
-        end_time: new Date(submitExamDto.end_time),
-        status: SubmissionStatus.COMPLETED,
-      },
-    });
-
-    return {
-      data: {
-        submission_id: submission.id,
-      },
-    };
+    return this.examRuntimeService.completeSubmission(
+      submitExamDto.submission_id,
+      endTime,
+      startTime,
+      studentId,
+    );
   }
+
   async getSubmissionOwner(submissionId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: {
