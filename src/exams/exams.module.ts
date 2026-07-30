@@ -3,9 +3,10 @@ import { ExamsController } from './exams.controller';
 import { ExamsService } from './exams.service';
 import { ExamsRepository } from './exams.repository';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ExamRuntimeModule } from '@/exam-runtime/exam-runtime.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ExamRuntimeModule],
   controllers: [ExamsController],
   providers: [ExamsService, ExamsRepository],
   exports: [ExamsService, ExamsRepository],

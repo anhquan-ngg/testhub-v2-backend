@@ -7,13 +7,19 @@ import { ExamsRepository } from './exams.repository';
 import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
 import { QueryExamDto } from './dto/query-exam.dto';
+import { ExamRuntimeQueueService } from '@/exam-runtime/exam-runtime-queue.service';
 
 @Injectable()
 export class ExamsService {
-  constructor(private readonly examsRepository: ExamsRepository) {}
+  constructor(
+    private readonly examsRepository: ExamsRepository,
+    private readonly examRuntimeQueue: ExamRuntimeQueueService,
+  ) {}
 
   async create(lecturerId: string, dto: CreateExamDto) {
-    return this.examsRepository.create(lecturerId, dto);
+    const exam = await this.examsRepository.create(lecturerId, dto);
+    await this.examRuntimeQueue.scheduleExam(exam);
+    return exam;
   }
 
   async findAll(query: QueryExamDto) {
@@ -30,12 +36,15 @@ export class ExamsService {
 
   async update(id: string, dto: UpdateExamDto) {
     await this.findOne(id);
-    return this.examsRepository.update(id, dto);
+    const exam = await this.examsRepository.update(id, dto);
+    await this.examRuntimeQueue.scheduleExam(exam);
+    return exam;
   }
 
   async remove(id: string) {
     await this.findOne(id);
     await this.examsRepository.softDelete(id);
+    await this.examRuntimeQueue.removeExamJobs(id);
     return { message: 'Exam deleted successfully' };
   }
 
@@ -43,7 +52,10 @@ export class ExamsService {
 
   async addQuestion(examId: string, questionId: string) {
     await this.findOne(examId);
-    const existing = await this.examsRepository.findExamQuestion(examId, questionId);
+    const existing = await this.examsRepository.findExamQuestion(
+      examId,
+      questionId,
+    );
     if (existing) {
       throw new ConflictException('Question already added to this exam');
     }
@@ -52,7 +64,10 @@ export class ExamsService {
 
   async removeQuestion(examId: string, questionId: string) {
     await this.findOne(examId);
-    const existing = await this.examsRepository.findExamQuestion(examId, questionId);
+    const existing = await this.examsRepository.findExamQuestion(
+      examId,
+      questionId,
+    );
     if (!existing) {
       throw new NotFoundException('Question not found in this exam');
     }

@@ -62,44 +62,47 @@ export class NotificationController {
     const { examId } = body;
 
     // Create registration with PENDING status
-    const registration = await this.notificationService.createExamRegistration(
-      examId,
-      studentId,
-      'PENDING',
-    );
-
-    // Find exam to get lecturer info
-    const exam = await this.notificationService.findExamWithLecturer(examId);
-    if (!exam) throw new Error('Exam not found');
-
-    const student = await this.notificationService.findUser(studentId);
-    const studentName = student?.full_name || 'Sinh viên';
-
-    // Send notification to lecturer
-    await this.notificationGateway.sendToUser(exam.lecturer_id, {
-      user: { connect: { id: exam.lecturer_id } },
-      title: 'Yêu cầu tham gia bài thi',
-      content: `${studentName} yêu cầu tham gia bài thi "${exam.title}"`,
-      type: 'INFO',
-      link: '/lecturer/exams',
-    });
-
-    // Emit exam event to lecturer for real-time UI update
-    this.notificationGateway.emitExamEvent(
-      exam.lecturer_id,
-      'exam:registration_requested',
-      {
-        examId: exam.id,
-        examTitle: exam.title,
+    const { registration, action } =
+      await this.notificationService.createExamRegistration(
+        examId,
         studentId,
-        studentName,
-        registrationId: registration.id,
-      },
-    );
+        'PENDING',
+      );
 
-    // Push admin dashboard update
-    const metrics = await this.notificationService.getDashboardMetrics();
-    this.notificationGateway.pushAdminDashboardUpdate(metrics);
+    if (action !== 'unchanged') {
+      // Find exam to get lecturer info
+      const exam = await this.notificationService.findExamWithLecturer(examId);
+      if (!exam) throw new Error('Exam not found');
+
+      const student = await this.notificationService.findUser(studentId);
+      const studentName = student?.full_name || 'Sinh viên';
+
+      // Send notification to lecturer
+      await this.notificationGateway.sendToUser(exam.lecturer_id, {
+        recipient: { connect: { id: exam.lecturer_id } },
+        title: 'Yêu cầu tham gia bài thi',
+        content: `${studentName} yêu cầu tham gia bài thi "${exam.title}"`,
+        type: 'INFO',
+        link: '/lecturer/exams',
+      });
+
+      // Emit exam event to lecturer for real-time UI update
+      this.notificationGateway.emitExamEvent(
+        exam.lecturer_id,
+        'exam:registration_requested',
+        {
+          examId: exam.id,
+          examTitle: exam.title,
+          studentId,
+          studentName,
+          registrationId: registration.id,
+        },
+      );
+
+      // Push admin dashboard update
+      const metrics = await this.notificationService.getDashboardMetrics();
+      this.notificationGateway.pushAdminDashboardUpdate(metrics);
+    }
 
     return registration;
   }
@@ -126,7 +129,7 @@ export class NotificationController {
 
     // Send notification to student
     await this.notificationGateway.sendToUser(studentId, {
-      user: { connect: { id: studentId } },
+      recipient: { connect: { id: studentId } },
       title: 'Đăng ký bài thi được chấp nhận',
       content: `Yêu cầu tham gia bài thi "${examTitle}" đã được chấp nhận`,
       type: 'SUCCESS',
@@ -170,30 +173,37 @@ export class NotificationController {
     }
 
     // Create registration with APPROVED status
-    const registration = await this.notificationService.createExamRegistration(
-      examId,
-      student.id,
-      'APPROVED',
-    );
+    const { registration, action } =
+      await this.notificationService.createExamRegistration(
+        examId,
+        student.id,
+        'APPROVED',
+      );
 
-    // Send notification to student
-    await this.notificationGateway.sendToUser(student.id, {
-      user: { connect: { id: student.id } },
-      title: 'Được thêm vào bài thi',
-      content: `Bạn đã được thêm vào bài thi "${exam.title}" bởi giảng viên ${exam.lecturer.full_name}`,
-      type: 'INFO',
-      link: '/home',
-    });
+    if (action !== 'unchanged') {
+      // Send notification to student
+      await this.notificationGateway.sendToUser(student.id, {
+        recipient: { connect: { id: student.id } },
+        title: 'Được thêm vào bài thi',
+        content: `Bạn đã được thêm vào bài thi "${exam.title}" bởi giảng viên ${exam.lecturer.full_name}`,
+        type: 'INFO',
+        link: '/home',
+      });
 
-    // Emit exam event to student for real-time UI update
-    this.notificationGateway.emitExamEvent(student.id, 'exam:student_added', {
-      examId: exam.id,
-      examTitle: exam.title,
-    });
+      // Emit exam event to student for real-time UI update
+      this.notificationGateway.emitExamEvent(
+        student.id,
+        'exam:student_added',
+        {
+          examId: exam.id,
+          examTitle: exam.title,
+        },
+      );
 
-    // Push admin dashboard update
-    const metrics = await this.notificationService.getDashboardMetrics();
-    this.notificationGateway.pushAdminDashboardUpdate(metrics);
+      // Push admin dashboard update
+      const metrics = await this.notificationService.getDashboardMetrics();
+      this.notificationGateway.pushAdminDashboardUpdate(metrics);
+    }
 
     return registration;
   }

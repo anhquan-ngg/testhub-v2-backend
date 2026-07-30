@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { SubmissionService } from './submission.service';
@@ -26,6 +27,14 @@ import { SubmitExamDto } from './dto/submit-exam.dto';
 import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { QuerySubmissionDto } from './dto/query-submission.dto';
 import { UpdateSubmissionDto } from './dto/update-submission.dto';
+import { Request } from 'express';
+
+interface AuthenticatedRequest extends Request {
+  user: {
+    id: string;
+    [key: string]: any;
+  };
+}
 
 @ApiTags('Submissions')
 @ApiBearerAuth()
@@ -45,6 +54,25 @@ export class SubmissionController {
   @ApiOperation({ summary: 'Get submissions with pagination and filters' })
   findAll(@Query() query: QuerySubmissionDto) {
     return this.submissionService.findAll(query);
+  }
+
+  @Get('exams/:examId/session')
+  @ApiOperation({ summary: 'Get active exam session for current student' })
+  getExamSession(
+    @Param('examId', new ParseUUIDPipe()) examId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.submissionService.getExamSession(examId, req.user.id);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('exams/:examId/start')
+  @ApiOperation({ summary: 'Start an exam for current student' })
+  startExamForUser(
+    @Param('examId', new ParseUUIDPipe()) examId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.submissionService.startExamForUser(examId, req.user.id);
   }
 
   @Get(':id')
@@ -93,7 +121,10 @@ export class SubmissionController {
   @ApiOperation({ summary: 'Submit an exam' })
   @ApiResponse({ status: 200, description: 'Exam submitted successfully.' })
   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-  async submitExam(@Body() submitExamDto: SubmitExamDto) {
-    return this.submissionService.submitByExam(submitExamDto);
+  async submitExam(
+    @Body() submitExamDto: SubmitExamDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.submissionService.submitByExam(submitExamDto, req.user.id);
   }
 }
