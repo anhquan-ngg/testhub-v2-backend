@@ -35,12 +35,21 @@ type ExamChapterDistributionItem = {
   quantity: number;
 };
 
+type QuestionFileRow = {
+  id: string;
+  url: string;
+  name: string;
+  type: string;
+  order: number;
+};
+
 type ExamQuestionRow = {
   id: string;
   question_text: string;
   options: unknown;
   question_type: string;
   question_format: string;
+  files: QuestionFileRow[];
 };
 
 @Injectable()
@@ -544,7 +553,7 @@ export class ExamRuntimeService implements OnModuleInit {
         exam: true,
         session: true,
         questions: {
-          orderBy: { created_at: 'asc' },
+          orderBy: [{ order: 'asc' }, { created_at: 'asc' }],
           include: {
             question: {
               select: {
@@ -553,6 +562,15 @@ export class ExamRuntimeService implements OnModuleInit {
                 options: true,
                 question_type: true,
                 question_format: true,
+                files: {
+                  orderBy: { order: 'asc' },
+                  select: {
+                    order: true,
+                    file: {
+                      select: { id: true, url: true, name: true, type: true },
+                    },
+                  },
+                },
               },
             },
           },
@@ -574,7 +592,16 @@ export class ExamRuntimeService implements OnModuleInit {
       practice: exam.practice,
       mode: exam.mode,
       is_public: exam.is_public,
-      questions: submission.questions.map((item) => item.question),
+      questions: submission.questions.map((item) => ({
+        ...item.question,
+        files: (item.question as any).files?.map((qf: any) => ({
+          ...qf.file,
+          order: qf.order,
+        })) ?? [],
+        submitted_answer: item.answer ?? null,
+        submitted_options: item.options ?? null,
+        answered: item.answer != null || item.options != null,
+      })),
       submissionId: submission.id,
       entered_at: submission.session?.entered_at ?? submission.start_time,
       last_ping: submission.session?.last_ping,
@@ -606,11 +633,26 @@ export class ExamRuntimeService implements OnModuleInit {
               options: true,
               question_type: true,
               question_format: true,
+              files: {
+                orderBy: { order: 'asc' },
+                select: {
+                  order: true,
+                  file: {
+                    select: { id: true, url: true, name: true, type: true },
+                  },
+                },
+              },
             },
           },
         },
       });
-      questions = examQuestions.map((eq) => eq.question);
+      questions = examQuestions.map((eq) => ({
+        ...(eq.question as any),
+        files: (eq.question as any).files?.map((qf: any) => ({
+          ...qf.file,
+          order: qf.order,
+        })) ?? [],
+      })) as ExamQuestionRow[];
     } else if (examData.mode === ExamMode.RANDOM_N) {
       const questionIdsRows = await this.prisma.question.findMany({
         where: {
@@ -651,9 +693,21 @@ export class ExamRuntimeService implements OnModuleInit {
             options: true,
             question_type: true,
             question_format: true,
+            files: {
+              orderBy: { order: 'asc' },
+              select: {
+                order: true,
+                file: {
+                  select: { id: true, url: true, name: true, type: true },
+                },
+              },
+            },
           },
         });
-        questions = questionRows as ExamQuestionRow[];
+        questions = questionRows.map((q) => ({
+          ...q,
+          files: (q.files ?? []).map((qf) => ({ ...qf.file, order: qf.order })),
+        })) as ExamQuestionRow[];
       }
       this.assertEnoughQuestions(
         questions.length,
@@ -692,14 +746,16 @@ export class ExamRuntimeService implements OnModuleInit {
           `,
         ),
       );
+      const flatByType = byTypeResults.flat();
       for (let i = 0; i < parsedDistribution.length; i++) {
         this.assertEnoughQuestions(
           byTypeResults[i].length,
           parsedDistribution[i].quantity,
           `BY_TYPE (${parsedDistribution[i].question_type}/${parsedDistribution[i].question_format})`,
         );
-        questions.push(...byTypeResults[i]);
       }
+      const enrichedByType = await this.enrichQuestionsWithFiles(flatByType);
+      questions.push(...enrichedByType);
     } else if (examData.mode === ExamMode.BY_CHAPTER) {
       let parsedDistribution: ExamChapterDistributionItem[];
       try {
@@ -736,14 +792,17 @@ export class ExamRuntimeService implements OnModuleInit {
           `,
         ),
       );
+      const flatByChapter = byChapterResults.flat();
       for (let i = 0; i < parsedDistribution.length; i++) {
         this.assertEnoughQuestions(
           byChapterResults[i].length,
           parsedDistribution[i].quantity,
           `BY_CHAPTER (${parsedDistribution[i].chapter_id})`,
         );
-        questions.push(...byChapterResults[i]);
       }
+      const enrichedByChapter =
+        await this.enrichQuestionsWithFiles(flatByChapter);
+      questions.push(...enrichedByChapter);
     }
 
     if (questions.length === 0) {
@@ -751,6 +810,35 @@ export class ExamRuntimeService implements OnModuleInit {
     }
 
     return questions;
+  }
+
+  private async enrichQuestionsWithFiles(
+    rows: ExamQuestionRow[],
+  ): Promise<ExamQuestionRow[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((q) => q.id);
+    const withFiles = await this.prisma.question.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        files: {
+          orderBy: { order: 'asc' },
+          select: {
+            order: true,
+            file: {
+              select: { id: true, url: true, name: true, type: true },
+            },
+          },
+        },
+      },
+    });
+    const filesById = new Map(
+      withFiles.map((q) => [
+        q.id,
+        q.files.map((qf) => ({ ...qf.file, order: qf.order })),
+      ]),
+    );
+    return rows.map((q) => ({ ...q, files: filesById.get(q.id) ?? [] }));
   }
 
   private async ensureSubmissionQuestions(
@@ -773,14 +861,25 @@ export class ExamRuntimeService implements OnModuleInit {
     }
 
     const questions = await this.selectQuestions(examData);
+    const orderedQuestions = this.shuffleArray(questions);
 
     await db.submissionQuestions.createMany({
-      data: questions.map((question) => ({
+      data: orderedQuestions.map((question, index) => ({
         submission_id: submissionId,
         question_id: question.id,
+        order: index,
       })),
       skipDuplicates: true,
     });
+  }
+
+  private shuffleArray<T>(items: T[]): T[] {
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
   }
 
   private async ensureSessionQuestions(submissionId: string, examId: string) {

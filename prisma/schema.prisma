@@ -288,10 +288,12 @@ model SubmissionQuestions {
   answer        String?
   score         Decimal?   @db.Decimal(10, 2)
   is_correct    Boolean    @default(false)
+  order         Int        @default(0)
   submission    Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
   question      Question   @relation(fields: [question_id], references: [id], onDelete: Cascade)
 
   @@unique([submission_id, question_id])
+  @@index([submission_id, order])
   @@map("submission_questions")
 }
 

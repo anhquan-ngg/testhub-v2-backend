@@ -82,9 +82,20 @@ export class SubmissionRepository {
         questions: {
           where: { is_deleted: false },
           include: {
-            question: true,
+            question: {
+              include: {
+                files: {
+                  include: {
+                    file: true,
+                  },
+                  orderBy: {
+                    order: 'asc',
+                  },
+                },
+              },
+            },
           },
-          orderBy: { created_at: 'asc' },
+          orderBy: [{ order: 'asc' }, { created_at: 'asc' }],
         },
         session: true,
       },
