@@ -82,6 +82,20 @@ enum NotificationType {
   SYSTEM
 }
 
+enum ExamViolationType {
+  TAB_HIDDEN
+  WINDOW_BLUR
+  FULLSCREEN_EXIT
+  CONNECTION_LOST
+  COPY
+  PASTE
+}
+
+enum ExamViolationSource {
+  CLIENT
+  SERVER
+}
+
 model User {
   id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   created_at            DateTime           @default(now())
@@ -99,6 +113,9 @@ model User {
   topics                Topic[]
   submissions           Submission[]
   registrations         ExamRegistration[]
+  violations            ExamViolation[]
+  retryGrantsReceived   ExamRetryGrant[]   @relation("ExamRetryGrantStudent")
+  retryGrantsGiven      ExamRetryGrant[]   @relation("ExamRetryGrantGranter")
   receivedNotifications Notification[]     @relation("ReceivedNotifications")
   sentNotifications     Notification[]     @relation("SentNotifications")
   files                 File[]             @relation("UploadedFiles")
@@ -145,6 +162,8 @@ model Exam {
   submissions     Submission[]
   questions       ExamQuestions[]
   registrations   ExamRegistration[]
+  violations      ExamViolation[]
+  retryGrants     ExamRetryGrant[]
   lecturer        User               @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
   topic           Topic              @relation(fields: [topic_id], references: [id], onDelete: Cascade)
 
@@ -203,7 +222,13 @@ model Submission {
   start_time  DateTime?
   end_time    DateTime?
   status      SubmissionStatus      @default(IN_PROGRESS)
+  /// Effective auto-submit deadline for this attempt. Set at start (now +
+  /// duration, capped by exam_end_time) and pushed back by a lecturer's
+  /// "extend time" grant — the BullMQ auto-submit job and the overdue
+  /// safety net both key off this instead of the static exam duration.
+  auto_submit_at DateTime?
   questions   SubmissionQuestions[]
+  violations  ExamViolation[]
   exam        Exam                  @relation(fields: [exam_id], references: [id], onDelete: Cascade)
   student     User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
   session     ExamSession?
@@ -272,8 +297,55 @@ model ExamSession {
   is_active     Boolean    @default(true)
   submission    Submission @relation(fields: [submission_id], references: [id])
 
-  @@index([is_active])
+  @@index([is_active, last_ping])
   @@map("exam_sessions")
+}
+
+/// One row per proctoring signal (tab hidden, window blur, fullscreen exit,
+/// connection loss...). Append-only audit trail — no soft-delete, no
+/// updated_at, cascade-deletes with its submission — same shape as
+/// ExamSession, the closest existing analogue (machine-generated runtime
+/// telemetry, never user-edited).
+model ExamViolation {
+  id            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at    DateTime            @default(now())
+  submission_id String              @db.Uuid
+  exam_id       String              @db.Uuid
+  student_id    String              @db.Uuid
+  type          ExamViolationType
+  source        ExamViolationSource @default(CLIENT)
+  occurred_at   DateTime            @default(now())
+  client_time   DateTime?
+  duration_ms   Int?
+  submission    Submission          @relation(fields: [submission_id], references: [id], onDelete: Cascade)
+  exam          Exam                @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+  student       User                @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([exam_id, occurred_at])
+  @@index([submission_id, type, occurred_at])
+  @@map("exam_violations")
+}
+
+/// An explicit, lecturer-granted exception letting one student start a new
+/// attempt at an official exam despite already having a COMPLETED
+/// submission (official exams otherwise hard-block re-entry). Deliberately
+/// separate from deleting a submission: the completed attempt and its score
+/// stay on record, this just authorizes one more try. `consumed_at` is set
+/// the moment `startExam` uses the grant to create the new attempt, so an
+/// unconsumed row is a standing, still-usable exception.
+model ExamRetryGrant {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at  DateTime  @default(now())
+  exam_id     String    @db.Uuid
+  student_id  String    @db.Uuid
+  granted_by  String    @db.Uuid
+  consumed_at DateTime?
+  exam        Exam      @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+  student     User      @relation("ExamRetryGrantStudent", fields: [student_id], references: [id], onDelete: Cascade)
+  granter     User      @relation("ExamRetryGrantGranter", fields: [granted_by], references: [id], onDelete: Cascade)
+
+  @@index([exam_id, student_id, consumed_at])
+  @@map("exam_retry_grants")
 }
 
 model SubmissionQuestions {

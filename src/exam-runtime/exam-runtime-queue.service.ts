@@ -61,15 +61,20 @@ export class ExamRuntimeQueueService implements OnModuleInit {
     ]);
   }
 
+  /** Idempotent: removes any previously scheduled auto-submit job for this
+   * submission first, so it doubles as a reschedule when a lecturer grants
+   * extra time to a student already in progress. */
   async scheduleAutoSubmit(submissionId: string, runAt: Date) {
+    const jobId = this.buildJobId(
+      EXAM_RUNTIME_JOBS.AUTO_SUBMIT_SUBMISSION,
+      submissionId,
+    );
+    await this.removeJob(jobId);
     await this.queue.add(
       EXAM_RUNTIME_JOBS.AUTO_SUBMIT_SUBMISSION,
       { submissionId },
       {
-        jobId: this.buildJobId(
-          EXAM_RUNTIME_JOBS.AUTO_SUBMIT_SUBMISSION,
-          submissionId,
-        ),
+        jobId,
         delay: Math.max(0, runAt.getTime() - Date.now()),
         removeOnComplete: true,
         removeOnFail: 100,

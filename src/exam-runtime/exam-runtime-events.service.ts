@@ -66,9 +66,17 @@ export class ExamRuntimeEventsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  stream(examId: string): Observable<MessageEvent> {
+  /**
+   * `types` is required (not defaulted) on purpose: without a whitelist, a
+   * new *MONITOR_* event type would leak straight to every student
+   * subscribed to that exam's SSE stream, since events are only keyed by
+   * examId. Student and lecturer routes each pass their own type list.
+   */
+  stream(examId: string, types: readonly string[]): Observable<MessageEvent> {
     return this.events$.pipe(
-      filter((event) => event.examId === examId),
+      filter(
+        (event) => event.examId === examId && types.includes(event.type),
+      ),
       map((event) => ({
         type: event.type,
         data: event.data,

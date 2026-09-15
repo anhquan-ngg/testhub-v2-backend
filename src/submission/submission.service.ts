@@ -13,6 +13,7 @@ import { QuerySubmissionDto } from './dto/query-submission.dto';
 import { UpdateSubmissionDto } from './dto/update-submission.dto';
 import { SubmissionRepository } from './submission.repository';
 import { ExamRuntimeService } from '@/exam-runtime/exam-runtime.service';
+import { ExamMonitorAggregator } from '@/exam-runtime/exam-monitor-aggregator.service';
 
 type ExamDistributionItem = {
   question_type: string;
@@ -39,6 +40,7 @@ export class SubmissionService {
     private readonly prisma: PrismaService,
     private readonly submissionRepository: SubmissionRepository,
     private readonly examRuntimeService: ExamRuntimeService,
+    private readonly monitor: ExamMonitorAggregator,
   ) {}
 
   async create(dto: CreateSubmissionDto) {
@@ -89,15 +91,26 @@ export class SubmissionService {
     return this.examRuntimeService.getSession(examId, studentId);
   }
 
-  async submitByQuestion(submitQuestionDto: SubmitQuestionDto) {
-    const submission = await this.prisma.submission.findUnique({
+  async submitByQuestion(submitQuestionDto: SubmitQuestionDto, studentId: string) {
+    // Ownership + status + not-deleted, all in one query. Previously this
+    // looked the submission up by id alone: any authenticated user holding
+    // a submission UUID could write answers into someone else's exam —
+    // including a completed one, before grading ran. This is also the
+    // endpoint that produces the "answered / total" count now shown live
+    // on the lecturer's monitoring page, so it doubles as that feature's
+    // integrity foundation.
+    const submission = await this.prisma.submission.findFirst({
       where: {
         id: submitQuestionDto.submission_id,
+        student_id: studentId,
+        status: SubmissionStatus.IN_PROGRESS,
+        is_deleted: false,
       },
+      select: { id: true, exam_id: true },
     });
 
     if (!submission) {
-      throw new NotFoundException('Submission not found');
+      throw new NotFoundException('Active submission not found');
     }
 
     const question = await this.prisma.question.findUnique({
@@ -210,6 +223,8 @@ export class SubmissionService {
         is_correct,
       },
     });
+
+    this.monitor.markDirty(submission.exam_id, submission.id);
 
     return {
       data: {

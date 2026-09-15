@@ -112,8 +112,14 @@ export class SubmissionController {
   @ApiOperation({ summary: 'Submit a question of exam' })
   @ApiResponse({ status: 200, description: 'Question submitted successfully.' })
   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-  async submitQuestion(@Body() submitQuestionDto: SubmitQuestionDto) {
-    return this.submissionService.submitByQuestion(submitQuestionDto);
+  async submitQuestion(
+    @Body() submitQuestionDto: SubmitQuestionDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    return this.submissionService.submitByQuestion(
+      submitQuestionDto,
+      req.user.id,
+    );
   }
 
   @HttpCode(HttpStatus.OK)

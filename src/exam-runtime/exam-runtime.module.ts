@@ -5,6 +5,7 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { NotificationModule } from '@/notification/notification.module';
 import { ExamRuntimeController } from './exam-runtime.controller';
 import { ExamRuntimeEventsService } from './exam-runtime-events.service';
+import { ExamMonitorAggregator } from './exam-monitor-aggregator.service';
 import { ExamRuntimeGateway } from './exam-runtime.gateway';
 import { ExamRuntimeProcessor } from './exam-runtime.processor';
 import { ExamRuntimeQueueService } from './exam-runtime-queue.service';
@@ -57,11 +58,12 @@ function getRedisConnection(config: ConfigService) {
   controllers: [ExamRuntimeController],
   providers: [
     ExamRuntimeEventsService,
+    ExamMonitorAggregator,
     ExamRuntimeGateway,
     ExamRuntimeProcessor,
     ExamRuntimeQueueService,
     ExamRuntimeService,
   ],
-  exports: [ExamRuntimeQueueService, ExamRuntimeService],
+  exports: [ExamRuntimeQueueService, ExamRuntimeService, ExamMonitorAggregator],
 })
 export class ExamRuntimeModule {}
