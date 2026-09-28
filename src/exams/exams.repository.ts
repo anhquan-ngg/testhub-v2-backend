@@ -5,6 +5,8 @@ import { UpdateExamDto } from './dto/update-exam.dto';
 import { QueryExamDto } from './dto/query-exam.dto';
 import { Prisma } from '@prisma/client';
 
+type Db = Prisma.TransactionClient | PrismaService;
+
 @Injectable()
 export class ExamsRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -85,8 +87,8 @@ export class ExamsRepository {
 
   // ── Question management ──────────────────────────────────────────────────────
 
-  async addQuestion(examId: string, questionId: string) {
-    return this.prisma.examQuestions.create({
+  async addQuestion(examId: string, questionId: string, db: Db = this.prisma) {
+    return db.examQuestions.create({
       data: { exam_id: examId, question_id: questionId },
     });
   }
@@ -97,8 +99,12 @@ export class ExamsRepository {
     });
   }
 
-  async findExamQuestion(examId: string, questionId: string) {
-    return this.prisma.examQuestions.findUnique({
+  async findExamQuestion(
+    examId: string,
+    questionId: string,
+    db: Db = this.prisma,
+  ) {
+    return db.examQuestions.findUnique({
       where: { exam_id_question_id: { exam_id: examId, question_id: questionId } },
     });
   }

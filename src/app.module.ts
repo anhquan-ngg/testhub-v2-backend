@@ -17,6 +17,8 @@ import { FilesModule } from './files/files.module';
 import { ExamRegistrationsModule } from './exam-registrations/exam-registrations.module';
 import { SubmissionModule } from './submission/submission.module';
 import { ExamRuntimeModule } from './exam-runtime/exam-runtime.module';
+import { QuestionImportModule } from './question-imports/question-import.module';
+import { ExamPrintModule } from './exam-print/exam-print.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { ExamRuntimeModule } from './exam-runtime/exam-runtime.module';
     ExamsModule,
     ExamRegistrationsModule,
     FilesModule,
+    QuestionImportModule,
+    ExamPrintModule,
   ],
   controllers: [AppController],
   providers: [AppService],

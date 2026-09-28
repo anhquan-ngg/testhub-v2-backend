@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ExamsRepository } from './exams.repository';
 import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
@@ -50,16 +51,31 @@ export class ExamsService {
 
   // ── Question management ────────────────────────────────────────────────────
 
-  async addQuestion(examId: string, questionId: string) {
-    await this.findOne(examId);
+  /**
+   * Attaches a question to an exam. Shared by the manual "pick questions"
+   * flow and the Word/Excel import commit step, so both enforce the same
+   * duplicate check. Pass `tx` to run as part of a caller's transaction; the
+   * exam-existence check is skipped in that case since the caller (e.g.
+   * QuestionImportService.commit) already validated it within its own scope
+   * check moments earlier.
+   */
+  async addQuestion(
+    examId: string,
+    questionId: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    if (!tx) {
+      await this.findOne(examId);
+    }
     const existing = await this.examsRepository.findExamQuestion(
       examId,
       questionId,
+      tx,
     );
     if (existing) {
       throw new ConflictException('Question already added to this exam');
     }
-    return this.examsRepository.addQuestion(examId, questionId);
+    return this.examsRepository.addQuestion(examId, questionId, tx);
   }
 
   async removeQuestion(examId: string, questionId: string) {

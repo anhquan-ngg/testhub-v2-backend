@@ -19,16 +19,26 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { ChaptersService } from './chapters.service';
+import { UserRole } from '@prisma/client';
+import { ChaptersService, type ChapterActor } from './chapters.service';
 import { CreateChapterDto } from './dto/create-chapter.dto';
 import { UpdateChapterDto } from './dto/update-chapter.dto';
 import { QueryChapterDto } from './dto/query-chapter.dto';
 import { JwtGuard } from '../auth/guards/jwt.guard';
+import { Roles } from '../common/decorators/roles.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
 import type { Request } from 'express';
+
+/** JwtGuard guarantees an authenticated user on every route here. */
+const toActor = (req: Request): ChapterActor => ({
+  id: String(req.user?.id ?? ''),
+  isAdmin: req.user?.role === UserRole.ADMIN,
+});
 
 @ApiTags('Chapters')
 @ApiBearerAuth()
-@UseGuards(JwtGuard)
+@UseGuards(JwtGuard, RolesGuard)
+@Roles(UserRole.LECTURER, UserRole.ADMIN)
 @Controller('chapters')
 export class ChaptersController {
   constructor(private readonly chaptersService: ChaptersService) {}
@@ -36,9 +46,9 @@ export class ChaptersController {
   @Post()
   @ApiOperation({ summary: 'Create a new chapter' })
   @ApiResponse({ status: 201, description: 'Chapter created successfully.' })
+  @ApiResponse({ status: 403, description: 'Topic belongs to another user.' })
   create(@Body() dto: CreateChapterDto, @Req() req: Request) {
-    const isAdmin = req.user?.role === 'ADMIN';
-    return this.chaptersService.create(dto, isAdmin);
+    return this.chaptersService.create(dto, toActor(req));
   }
 
   @Get()
@@ -46,8 +56,7 @@ export class ChaptersController {
     summary: 'Get chapters with pagination and filters (topic_id, parent_id)',
   })
   findAll(@Query() query: QueryChapterDto, @Req() req: Request) {
-    const isAdmin = req.user?.role === 'ADMIN';
-    return this.chaptersService.findAll(query, isAdmin);
+    return this.chaptersService.findAll(query, toActor(req));
   }
 
   @Get(':id')
@@ -56,23 +65,25 @@ export class ChaptersController {
   })
   @ApiResponse({ status: 404, description: 'Chapter not found.' })
   findOne(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) {
-    const isAdmin = req.user?.role === 'ADMIN';
-    return this.chaptersService.findOne(id, isAdmin);
+    return this.chaptersService.findOne(id, toActor(req));
   }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Update a chapter' })
+  @ApiResponse({ status: 404, description: 'Chapter not found.' })
   update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateChapterDto,
+    @Req() req: Request,
   ) {
-    return this.chaptersService.update(id, dto);
+    return this.chaptersService.update(id, dto, toActor(req));
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft-delete a chapter' })
-  remove(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.chaptersService.remove(id);
+  @ApiResponse({ status: 404, description: 'Chapter not found.' })
+  remove(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: Request) {
+    return this.chaptersService.remove(id, toActor(req));
   }
 }
