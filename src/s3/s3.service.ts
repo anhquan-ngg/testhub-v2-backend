@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import {
   S3Client,
   PutObjectCommand,
+  CopyObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
@@ -38,13 +39,73 @@ export class S3Service implements OnModuleInit {
     // Bucket is predefined and already exists in AWS as per user's choice.
   }
 
-  async createUploadUrl(filePath: string): Promise<UrlDto> {
+  async createUploadUrl(
+    filePath: string,
+    contentType?: string,
+  ): Promise<UrlDto> {
     const command = new PutObjectCommand({
       Bucket: this.bucketName,
       Key: filePath,
+      ...(contentType ? { ContentType: contentType } : {}),
     });
     const url = await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
     return { url };
+  }
+
+  async getObjectBuffer(
+    objectName: string,
+    maxBytes?: number,
+  ): Promise<Buffer> {
+    if (maxBytes !== undefined) {
+      const head = await this.s3Client.send(
+        new HeadObjectCommand({ Bucket: this.bucketName, Key: objectName }),
+      );
+      if (
+        typeof head.ContentLength === 'number' &&
+        head.ContentLength > maxBytes
+      ) {
+        throw new Error(
+          `S3 object "${objectName}" exceeds the allowed size limit`,
+        );
+      }
+    }
+    const response = await this.s3Client.send(
+      new GetObjectCommand({ Bucket: this.bucketName, Key: objectName }),
+    );
+    if (!response.Body) {
+      throw new Error(`S3 object "${objectName}" has no body`);
+    }
+    return Buffer.from(await response.Body.transformToByteArray());
+  }
+
+  async putObject(objectName: string, body: Buffer, contentType: string) {
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: objectName,
+        Body: body,
+        ContentType: contentType,
+      }),
+    );
+  }
+
+  async copyObject(sourceName: string, destinationName: string) {
+    const copySource = `${this.bucketName}/${sourceName}`
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/');
+    await this.s3Client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        Key: destinationName,
+        CopySource: copySource,
+      }),
+    );
+  }
+
+  /** Hostname of the bucket, as used by storage URLs and presigned URLs. */
+  getStorageHost(): string {
+    return `${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com`;
   }
 
   createStorageUrl(objectName: string): string {
@@ -53,7 +114,7 @@ export class S3Service implements OnModuleInit {
       .map(encodeURIComponent)
       .join('/');
 
-    return `https://${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com/${encodedObjectName}`;
+    return `https://${this.getStorageHost()}/${encodedObjectName}`;
   }
 
   async findAll({ path, limit, startAfter }: ListObjectDto) {

@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateChapterDto } from './dto/create-chapter.dto';
-import { UpdateChapterDto } from './dto/update-chapter.dto';
 import { QueryChapterDto } from './dto/query-chapter.dto';
 import { Prisma } from '@prisma/client';
 
@@ -32,12 +31,21 @@ export class ChaptersRepository {
     });
   }
 
-  async findMany(query: QueryChapterDto, isAdmin = false) {
+  /**
+   * Topic filter applied to every read. `ownerId` is set for non-admins so
+   * they only ever see chapters of topics they created.
+   */
+  private topicScope(ownerId?: string): Prisma.TopicWhereInput {
+    return { is_deleted: false, ...(ownerId && { created_by: ownerId }) };
+  }
+
+  async findMany(query: QueryChapterDto, isAdmin = false, ownerId?: string) {
     const { page = 1, limit = 10, topic_id, parent_id, search } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.ChapterWhereInput = {
       ...(!isAdmin && { is_deleted: false }),
+      ...(ownerId && { topic: this.topicScope(ownerId) }),
       ...(topic_id && { topic_id }),
       ...(parent_id !== undefined && { parent_id: parent_id ?? null }),
       ...(search && { name: { contains: search, mode: 'insensitive' } }),
@@ -57,14 +65,14 @@ export class ChaptersRepository {
     return { data, total, page, limit };
   }
 
-  async findById(id: string, isAdmin = false) {
+  async findById(id: string, isAdmin = false, ownerId?: string) {
     const chapterSelect = isAdmin ? this.adminSelect : this.publicSelect;
 
     return this.prisma.chapter.findFirst({
       where: {
         id,
         ...(!isAdmin && { is_deleted: false }),
-        topic: { is_deleted: false },
+        topic: this.topicScope(ownerId),
         OR: [{ parent_id: null }, { parent: { is: { is_deleted: false } } }],
       },
       select: {
@@ -95,8 +103,22 @@ export class ChaptersRepository {
     });
   }
 
-  async update(id: string, dto: UpdateChapterDto) {
-    return this.prisma.chapter.update({ where: { id }, data: dto });
+  async findTopic(topicId: string) {
+    return this.prisma.topic.findFirst({
+      where: { id: topicId, is_deleted: false },
+      select: { id: true, created_by: true },
+    });
+  }
+
+  async findParentCandidate(id: string) {
+    return this.prisma.chapter.findFirst({
+      where: { id, is_deleted: false },
+      select: { id: true, topic_id: true, parent_id: true },
+    });
+  }
+
+  async update(id: string, data: Prisma.ChapterUncheckedUpdateInput) {
+    return this.prisma.chapter.update({ where: { id }, data });
   }
 
   async softDelete(id: string) {

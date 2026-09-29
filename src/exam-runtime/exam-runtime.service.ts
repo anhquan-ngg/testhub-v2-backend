@@ -97,7 +97,7 @@ type ExamChapterDistributionItem = {
   quantity: number;
 };
 
-type QuestionFileRow = {
+export type QuestionFileRow = {
   id: string;
   url: string;
   name: string;
@@ -105,7 +105,7 @@ type QuestionFileRow = {
   order: number;
 };
 
-type ExamQuestionRow = {
+export type ExamQuestionRow = {
   id: string;
   question_text: string;
   options: unknown;
@@ -1331,7 +1331,13 @@ export class ExamRuntimeService implements OnModuleInit {
     };
   }
 
-  private async selectQuestions(examData: {
+  /**
+   * Draws one question set for an exam according to its mode (MANUAL,
+   * RANDOM_N, BY_TYPE, BY_CHAPTER). Every call on a random mode produces a
+   * fresh draw. Public so the offline print flow (ExamPrintService) builds
+   * its variants from exactly the same selection rules as online attempts.
+   */
+  async selectQuestions(examData: {
     id: string;
     topic_id: string;
     mode: ExamMode;

@@ -82,6 +82,29 @@ enum NotificationType {
   SYSTEM
 }
 
+enum QuestionImportSourceType {
+  DOCX
+  XLSX
+}
+
+enum QuestionImportStatus {
+  UPLOADING
+  QUEUED
+  PARSING
+  REVIEW_REQUIRED
+  COMMITTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum QuestionImportItemStatus {
+  VALID
+  INVALID
+  COMMITTED
+  SKIPPED
+}
+
 enum ExamViolationType {
   TAB_HIDDEN
   WINDOW_BLUR
@@ -119,6 +142,7 @@ model User {
   receivedNotifications Notification[]     @relation("ReceivedNotifications")
   sentNotifications     Notification[]     @relation("SentNotifications")
   files                 File[]             @relation("UploadedFiles")
+  questionImports       QuestionImport[]
 
   @@index([role])
   @@index([status])
@@ -164,6 +188,7 @@ model Exam {
   registrations   ExamRegistration[]
   violations      ExamViolation[]
   retryGrants     ExamRetryGrant[]
+  questionImports QuestionImport[]
   lecturer        User               @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
   topic           Topic              @relation(fields: [topic_id], references: [id], onDelete: Cascade)
 
@@ -181,28 +206,31 @@ model Topic {
   created_by String    @db.Uuid
   name       String
 
-  exams    Exam[]
-  chapters Chapter[]
-  creator  User      @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  exams           Exam[]
+  chapters        Chapter[]
+  creator         User             @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  questionImports QuestionImport[]
 
   @@index([created_by])
   @@map("topics")
 }
 
 model Chapter {
-  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  is_deleted Boolean    @default(false)
-  deleted_at DateTime?
-  created_at DateTime   @default(now())
-  updated_at DateTime   @updatedAt
-  topic_id   String     @db.Uuid
-  parent_id  String?    @db.Uuid
-  name       String
-  order      Int
-  topic      Topic      @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  parent     Chapter?   @relation("ChapterToChapter", fields: [parent_id], references: [id], onDelete: Cascade)
-  children   Chapter[]  @relation("ChapterToChapter")
-  questions  Question[]
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_deleted             Boolean              @default(false)
+  deleted_at             DateTime?
+  created_at             DateTime             @default(now())
+  updated_at             DateTime             @updatedAt
+  topic_id               String               @db.Uuid
+  parent_id              String?              @db.Uuid
+  name                   String
+  order                  Int
+  topic                  Topic                @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  parent                 Chapter?             @relation("ChapterToChapter", fields: [parent_id], references: [id], onDelete: Cascade)
+  children               Chapter[]            @relation("ChapterToChapter")
+  questions              Question[]
+  defaultQuestionImports QuestionImport[]     @relation("QuestionImportDefaultChapter")
+  questionImportItems    QuestionImportItem[] @relation("QuestionImportItemChapter")
 
   @@index([topic_id, order])
   @@index([parent_id])
@@ -257,6 +285,7 @@ model Question {
   exams           ExamQuestions[]
   files           QuestionFiles[]
   chapter         Chapter               @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  importItems     QuestionImportItem[]
 
   @@index([chapter_id])
   @@index([question_type, question_format])
@@ -388,23 +417,99 @@ model ExamRegistration {
 }
 
 model File {
-  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name        String
-  url         String
-  s3_key      String?
-  type        FileType
-  size        Int?
-  entity_type String?
-  entity_id   String?
-  uploaded_by String          @db.Uuid
-  uploaded_at DateTime        @default(now())
-  status      FileStatus      @default(PENDING)
-  uploadedBy  User            @relation("UploadedFiles", fields: [uploaded_by], references: [id], onDelete: Cascade)
-  questions   QuestionFiles[]
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  url          String
+  s3_key       String?
+  type         FileType
+  size         Int?
+  entity_type  String?
+  entity_id    String?
+  uploaded_by  String                @db.Uuid
+  uploaded_at  DateTime              @default(now())
+  status       FileStatus            @default(PENDING)
+  uploadedBy   User                  @relation("UploadedFiles", fields: [uploaded_by], references: [id], onDelete: Cascade)
+  questions    QuestionFiles[]
+  importAssets QuestionImportAsset[]
 
   @@index([entity_type, entity_id])
   @@index([uploaded_by])
   @@map("files")
+}
+
+model QuestionImport {
+  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at         DateTime                 @default(now())
+  updated_at         DateTime                 @updatedAt
+  created_by         String                   @db.Uuid
+  topic_id           String                   @db.Uuid
+  default_chapter_id String?                  @db.Uuid
+  exam_id            String?                  @db.Uuid
+  source_type        QuestionImportSourceType
+  status             QuestionImportStatus     @default(UPLOADING)
+  source_name        String
+  source_mime_type   String
+  source_size        Int
+  source_s3_key      String
+  total_items        Int                      @default(0)
+  valid_items        Int                      @default(0)
+  invalid_items      Int                      @default(0)
+  committed_items    Int                      @default(0)
+  skipped_items      Int                      @default(0)
+  error_message      String?
+  expires_at         DateTime
+  committed_at       DateTime?
+  creator            User                     @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic              Topic                    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  defaultChapter     Chapter?                 @relation("QuestionImportDefaultChapter", fields: [default_chapter_id], references: [id], onDelete: SetNull)
+  exam               Exam?                    @relation(fields: [exam_id], references: [id], onDelete: SetNull)
+  items              QuestionImportItem[]
+
+  @@index([created_by, created_at(sort: Desc)])
+  @@index([status, expires_at])
+  @@map("question_imports")
+}
+
+model QuestionImportItem {
+  id           String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at   DateTime                 @default(now())
+  updated_at   DateTime                 @updatedAt
+  import_id    String                   @db.Uuid
+  source_index Int
+  source_code  String?
+  chapter_id   String?                  @db.Uuid
+  data         Json
+  errors       Json
+  warnings     Json
+  fingerprint  String?
+  status       QuestionImportItemStatus
+  question_id  String?                  @db.Uuid
+  import       QuestionImport           @relation(fields: [import_id], references: [id], onDelete: Cascade)
+  chapter      Chapter?                 @relation("QuestionImportItemChapter", fields: [chapter_id], references: [id], onDelete: SetNull)
+  question     Question?                @relation(fields: [question_id], references: [id], onDelete: SetNull)
+  assets       QuestionImportAsset[]
+
+  @@unique([import_id, source_index])
+  @@index([import_id, status])
+  @@index([fingerprint])
+  @@map("question_import_items")
+}
+
+model QuestionImportAsset {
+  id          String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at  DateTime           @default(now())
+  item_id     String             @db.Uuid
+  temp_s3_key String
+  name        String
+  mime_type   String
+  size        Int
+  order       Int
+  file_id     String?            @db.Uuid
+  item        QuestionImportItem @relation(fields: [item_id], references: [id], onDelete: Cascade)
+  file        File?              @relation(fields: [file_id], references: [id], onDelete: SetNull)
+
+  @@index([item_id, order])
+  @@map("question_import_assets")
 }
 
 model Notification {
