@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateChapterDto } from './dto/create-chapter.dto';
-import { UpdateChapterDto } from './dto/update-chapter.dto';
 import { QueryChapterDto } from './dto/query-chapter.dto';
 import { Prisma } from '@prisma/client';
 
@@ -118,8 +117,8 @@ export class ChaptersRepository {
     });
   }
 
-  async update(id: string, dto: UpdateChapterDto) {
-    return this.prisma.chapter.update({ where: { id }, data: dto });
+  async update(id: string, data: Prisma.ChapterUncheckedUpdateInput) {
+    return this.prisma.chapter.update({ where: { id }, data });
   }
 
   async softDelete(id: string) {

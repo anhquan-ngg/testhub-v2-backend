@@ -13,6 +13,7 @@ import {
   ExamRuntimeService,
   type ExamQuestionRow,
 } from '@/exam-runtime/exam-runtime.service';
+import { isAllowedPrintRequest } from './exam-print.network';
 import {
   PRINT_READY_FLAG,
   renderAnswerKeyHtml,
@@ -310,6 +311,16 @@ export class ExamPrintService {
   ): Promise<Buffer> {
     const page = await browser.newPage();
     try {
+      // Must be armed before the HTML is loaded so that no subresource
+      // request can slip through.
+      const allowedHosts = [this.s3.getStorageHost()];
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const action = isAllowedPrintRequest(request.url(), allowedHosts)
+          ? request.continue()
+          : request.abort('blockedbyclient');
+        action.catch(() => undefined);
+      });
       await page.setContent(doc.html, {
         waitUntil: 'networkidle0',
         timeout: PAGE_LOAD_TIMEOUT_MS,

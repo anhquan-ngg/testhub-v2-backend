@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -51,14 +52,37 @@ export class ChaptersService {
   async update(id: string, dto: UpdateChapterDto, actor: ChapterActor) {
     const existing = await this.findOne(id, actor);
     const topicId = dto.topic_id ?? existing.topic_id;
-    if (topicId !== existing.topic_id) {
+    const topicChanged = topicId !== existing.topic_id;
+    if (topicChanged) {
       await this.assertTopicWritable(topicId, actor);
+      // Descendants keep their own topic_id, so moving a chapter that has
+      // sub-chapters would split its tree across two topics.
+      if (existing.children.length > 0) {
+        throw new ConflictException(
+          'A chapter with sub-chapters cannot be moved to another topic',
+        );
+      }
     }
-    const parentId = dto.parent_id ?? existing.parent_id;
+
+    // `undefined` = not sent (keep), `null` = explicit "make it a root
+    // chapter". A kept parent belongs to the old topic, so it cannot survive
+    // a topic change and the chapter becomes a root chapter of the new topic.
+    const parentId =
+      dto.parent_id !== undefined
+        ? dto.parent_id
+        : topicChanged
+          ? null
+          : existing.parent_id;
     if (parentId) {
       await this.assertValidParent(parentId, topicId, id);
     }
-    return this.chaptersRepository.update(id, dto);
+
+    const { parent_id: requestedParentId, ...rest } = dto;
+    void requestedParentId;
+    return this.chaptersRepository.update(id, {
+      ...rest,
+      ...(parentId !== existing.parent_id && { parent_id: parentId }),
+    });
   }
 
   async remove(id: string, actor: ChapterActor) {

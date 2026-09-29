@@ -52,7 +52,10 @@ export class S3Service implements OnModuleInit {
     return { url };
   }
 
-  async getObjectBuffer(objectName: string, maxBytes?: number): Promise<Buffer> {
+  async getObjectBuffer(
+    objectName: string,
+    maxBytes?: number,
+  ): Promise<Buffer> {
     if (maxBytes !== undefined) {
       const head = await this.s3Client.send(
         new HeadObjectCommand({ Bucket: this.bucketName, Key: objectName }),
@@ -100,13 +103,18 @@ export class S3Service implements OnModuleInit {
     );
   }
 
+  /** Hostname of the bucket, as used by storage URLs and presigned URLs. */
+  getStorageHost(): string {
+    return `${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com`;
+  }
+
   createStorageUrl(objectName: string): string {
     const encodedObjectName = objectName
       .split('/')
       .map(encodeURIComponent)
       .join('/');
 
-    return `https://${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com/${encodedObjectName}`;
+    return `https://${this.getStorageHost()}/${encodedObjectName}`;
   }
 
   async findAll({ path, limit, startAfter }: ListObjectDto) {

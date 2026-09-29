@@ -20,7 +20,10 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import sharp from 'sharp';
-import { assertOfficeFileSignature } from '../common/utils/office-file-signature.util';
+import {
+  assertOfficeFileSignature,
+  assertOfficeZipLimits,
+} from '../common/utils/office-file-signature.util';
 import { ExamsService } from '../exams/exams.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
@@ -29,7 +32,10 @@ import { CreateQuestionImportDto } from './dto/create-question-import.dto';
 import { QueryQuestionImportItemsDto } from './dto/query-question-import-items.dto';
 import { UpdateQuestionImportItemDto } from './dto/update-question-import-item.dto';
 import {
+  QUESTION_IMPORT_COMMIT_STALE_MS,
   QUESTION_IMPORT_MAX_FILE_SIZE,
+  QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES,
+  QUESTION_IMPORT_MAX_ZIP_ENTRIES,
   QUESTION_IMPORT_MIME_TYPES,
   QUESTION_IMPORT_TTL_HOURS,
 } from './question-import.constants';
@@ -275,12 +281,23 @@ export class QuestionImportService {
       questionImport.exam_id ?? undefined,
     );
 
+    // Expiry is part of the claim itself: cleanupExpired may cancel and
+    // delete this import's files at any moment after expires_at passes.
     const claimed = await this.prisma.questionImport.updateMany({
-      where: { id: importId, status: QuestionImportStatus.REVIEW_REQUIRED },
+      where: {
+        id: importId,
+        status: QuestionImportStatus.REVIEW_REQUIRED,
+        expires_at: { gt: new Date() },
+      },
       data: { status: QuestionImportStatus.COMMITTING, error_message: null },
     });
-    if (!claimed.count)
-      throw new ConflictException('Import is already being committed');
+    if (!claimed.count) {
+      throw new ConflictException(
+        questionImport.expires_at.getTime() <= Date.now()
+          ? 'Import has expired'
+          : 'Import is already being committed',
+      );
+    }
 
     const copiedKeys: string[] = [];
     let committed = false;
@@ -578,6 +595,10 @@ export class QuestionImportService {
         );
       }
       assertOfficeFileSignature(buffer, questionImport.source_type);
+      assertOfficeZipLimits(buffer, {
+        maxEntries: QUESTION_IMPORT_MAX_ZIP_ENTRIES,
+        maxUncompressedBytes: QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES,
+      });
       const parsed =
         questionImport.source_type === QuestionImportSourceType.DOCX
           ? await this.docxParser.parse(buffer)
@@ -705,19 +726,54 @@ export class QuestionImportService {
     }
   }
 
+  /**
+   * Housekeeping run by the hourly cleanup job:
+   * 1. imports stuck in COMMITTING (worker died mid-commit) that have not
+   *    expired go back to REVIEW_REQUIRED so they can be committed again;
+   * 2. expired imports — including stuck COMMITTING ones — are cancelled and
+   *    their S3 objects removed.
+   * Every import is claimed with a conditional update first and files are only
+   * deleted when that claim wins, so a concurrent commit/parse that moved the
+   * import on in the meantime is never cleaned up underneath.
+   */
   async cleanupExpired() {
+    const now = new Date();
+    const staleBefore = new Date(
+      now.getTime() - QUESTION_IMPORT_COMMIT_STALE_MS,
+    );
+
+    const recovered = await this.prisma.questionImport.updateMany({
+      where: {
+        status: QuestionImportStatus.COMMITTING,
+        updated_at: { lt: staleBefore },
+        expires_at: { gt: now },
+      },
+      data: {
+        status: QuestionImportStatus.REVIEW_REQUIRED,
+        error_message: 'Lần tạo câu hỏi trước bị gián đoạn, vui lòng thử lại',
+      },
+    });
+
     const expired = await this.prisma.questionImport.findMany({
       where: {
-        expires_at: { lt: new Date() },
-        status: {
-          in: [
-            QuestionImportStatus.UPLOADING,
-            QuestionImportStatus.QUEUED,
-            QuestionImportStatus.PARSING,
-            QuestionImportStatus.REVIEW_REQUIRED,
-            QuestionImportStatus.FAILED,
-          ],
-        },
+        expires_at: { lt: now },
+        OR: [
+          {
+            status: {
+              in: [
+                QuestionImportStatus.UPLOADING,
+                QuestionImportStatus.QUEUED,
+                QuestionImportStatus.PARSING,
+                QuestionImportStatus.REVIEW_REQUIRED,
+                QuestionImportStatus.FAILED,
+              ],
+            },
+          },
+          {
+            status: QuestionImportStatus.COMMITTING,
+            updated_at: { lt: staleBefore },
+          },
+        ],
       },
       include: {
         items: {
@@ -725,22 +781,46 @@ export class QuestionImportService {
         },
       },
     });
+
+    let cleaned = 0;
     for (const questionImport of expired) {
-      await Promise.all([
-        this.s3.remove(questionImport.source_s3_key),
-        ...questionImport.items.flatMap((item) =>
-          item.assets.map((asset) => this.s3.remove(asset.temp_s3_key)),
-        ),
-      ]);
-      await this.prisma.questionImport.update({
-        where: { id: questionImport.id },
+      const claimed = await this.prisma.questionImport.updateMany({
+        where: {
+          id: questionImport.id,
+          status: questionImport.status,
+          expires_at: { lt: now },
+          ...(questionImport.status === QuestionImportStatus.COMMITTING && {
+            updated_at: { lt: staleBefore },
+          }),
+        },
         data: {
           status: QuestionImportStatus.CANCELLED,
           error_message: 'Import expired before completion',
         },
       });
+      if (!claimed.count) continue;
+
+      // Best-effort: the import is already cancelled, so a failed delete
+      // only leaves an orphan object and must not abort the rest of the run.
+      const keys = [
+        questionImport.source_s3_key,
+        ...questionImport.items.flatMap((item) =>
+          item.assets.map((asset) => asset.temp_s3_key),
+        ),
+      ];
+      const outcomes = await Promise.allSettled(
+        keys.map((key) => this.s3.remove(key)),
+      );
+      outcomes.forEach((outcome, index) => {
+        if (outcome.status === 'rejected') {
+          this.logger.warn(
+            `Import ${questionImport.id}: could not remove expired object ${keys[index]}: ${this.errorMessage(outcome.reason)}`,
+          );
+        }
+      });
+      cleaned += 1;
     }
-    return { cleaned: expired.length };
+    return { cleaned, recovered: recovered.count };
   }
 
   /**
