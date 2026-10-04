@@ -11,7 +11,7 @@ Hướng dẫn chung của repo nằm trong `AGENTS.md` (được import bên d�
 
 ## Lưu ý riêng cho Claude Code
 
-- Không dùng bất kỳ lệnh hay công cụ nào để đọc nội dung hoặc in ra giá trị từ `.env`, `.env.production`, `quanna-keypair.pem`. Nếu cần tên biến, tra trong code và `AGENTS.md` mục 6.
+- Không dùng bất kỳ lệnh hay công cụ nào để đọc nội dung hoặc xuất giá trị từ `.env`, `.env.production`, các file `.env*` khác, hay `quanna-keypair.pem`. Nếu cần tên biến, tra trong code và `AGENTS.md` mục 6.
 - Lint chỉ kiểm tra: `npx eslint "{src,apps,libs,test}/**/*.ts"`. Chỉ chạy `npm run lint` (có `--fix`) hoặc `npm run format` khi người dùng muốn tự động sửa file.
 - Typecheck: `npx tsc --noEmit -p tsconfig.json --incremental false` (tránh ghi `tsbuildinfo`).
 - Lệnh dài (`npm test`, `npm run build`, typecheck) có thể chạy nền rồi đọc kết quả, thay vì chặn phiên.
