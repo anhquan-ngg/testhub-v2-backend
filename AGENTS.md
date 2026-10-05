@@ -54,7 +54,7 @@ prisma/
 prisma.config.ts          # Prisma config: schema, migrations path, DATABASE_URL
 test/                     # e2e (jest-e2e.json, app.e2e-spec.ts)
 docker-compose.yaml       # Postgres 17 (5432) + Redis 7 (6379) cho local
-.github/workflows/deploy.yml  # CI/CD: push master → test → build → deploy EC2
+.github/workflows/deploy.yml  # CI/CD: push master → Prisma generate → test → build → deploy EC2
 ```
 
 ## 3. Lệnh thường dùng
@@ -65,7 +65,7 @@ Chạy tại thư mục gốc repo.
 | --- | --- | --- |
 | Cài dependencies | `npm install` (CI dùng `npm ci`) | |
 | Hạ tầng local | `docker compose up -d` | Postgres + Redis theo `docker-compose.yaml` |
-| Sinh Prisma Client | `npx prisma generate` | Cần chạy sau khi sửa `prisma/schema.prisma` |
+| Sinh Prisma Client | `npx prisma generate` | Cần chạy sau `npm ci` và khi sửa `prisma/schema.prisma`; CI dùng URL PostgreSQL giả chỉ cho bước generate |
 | Chạy dev | `npm run start:dev` | `nest start --watch`, cổng `PORT` hoặc 3001 |
 | Debug | `npm run start:debug` | |
 | Build | `npm run build` | `nest build` → `dist/` |

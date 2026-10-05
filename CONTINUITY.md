@@ -2,7 +2,7 @@
 
 > Trạng thái và bàn giao giữa các phiên làm việc. Đọc trước khi làm việc; cập nhật sau mỗi nhiệm vụ có thay đổi đáng kể.
 
-**Cập nhật lần cuối:** 2026-10-02 — tạo mới file (khảo sát codebase, chưa sửa source).
+**Cập nhật lần cuối:** 2026-10-05 — generate Prisma Client trước test/build trong CI, bỏ ZenStack và sửa setup test AppController.
 
 ## Cách cập nhật file này
 
@@ -30,23 +30,22 @@
 - Upload file qua presigned S3 URL rồi xác nhận (`/files/upload-url` → PUT → `/files/:id/confirm`) — `src/files/`.
 - Phân trang trả về `{ data, total, page, limit }`; xóa mềm (`is_deleted`) cho topic/chapter/question.
 - Thông báo realtime qua Socket.IO namespace `/notifications`, room `user:{userId}` và `room:admin` — `src/notification/notification.gateway.ts`.
+- `.github/workflows/deploy.yml` generate Prisma Client sau `npm ci` ở cả job test và build. URL PostgreSQL giả chỉ phục vụ `prisma generate`, không kết nối DB. Workflow không còn lệnh/artifact ZenStack; deploy EC2 vẫn generate client và chạy migration từ schema Prisma hiện có.
 
 ## Vấn đề / TODO đã xác minh
 
-1. `npm test`: `src/app.controller.spec.ts` fail — `AppService` cần `PrismaService` nhưng test không cung cấp provider.
-2. Gateway `/notifications` tin `userId`/`userRole` từ `handshake.query`, không verify JWT ⇒ client bất kỳ có thể nhận thông báo của người khác hoặc vào `room:admin` (`src/notification/notification.gateway.ts:33-52`). Vấn đề bảo mật, chưa sửa.
-3. Gateway `/exam-runtime` verify token bằng `JwtService` mặc định (secret `JWT_SECRET` trong `src/auth/auth.module.ts`) trong khi access token được ký bằng `JWT_ACCESS_SECRET`; frontend hiện không dùng namespace này.
-4. Frontend gọi `POST /model/File/updateMany` (`../testhub-v2/src/hooks/useFiles.ts`) nhưng backend không có route `/model/*`.
-5. `npm run seed` trỏ tới `prisma/seed.ts` không tồn tại.
-6. README hướng dẫn `cp .env.example .env` nhưng repo không có `.env.example`.
-7. README và `.github/workflows/deploy.yml` nhắc tới ZenStack (`npx zenstack generate`, `schema.zmodel`, `node_modules/.zenstack`) nhưng repo không có `schema.zmodel` và không có dependency ZenStack.
-8. `src/prisma/prisma-hooks.service.ts` không được đăng ký ở module nào (code chết); cập nhật dashboard thực tế được đẩy từ `src/notification/notification.controller.ts`.
-9. `npm run lint` có `--fix`; bước lint trong CI đang bị comment.
+1. Gateway `/notifications` tin `userId`/`userRole` từ `handshake.query`, không verify JWT ⇒ client bất kỳ có thể nhận thông báo của người khác hoặc vào `room:admin` (`src/notification/notification.gateway.ts:33-52`). Vấn đề bảo mật, chưa sửa.
+2. Gateway `/exam-runtime` verify token bằng `JwtService` mặc định (secret `JWT_SECRET` trong `src/auth/auth.module.ts`) trong khi access token được ký bằng `JWT_ACCESS_SECRET`; frontend hiện không dùng namespace này.
+3. Frontend gọi `POST /model/File/updateMany` (`../testhub-v2/src/hooks/useFiles.ts`) nhưng backend không có route `/model/*`.
+4. `npm run seed` trỏ tới `prisma/seed.ts` không tồn tại.
+5. README hướng dẫn `cp .env.example .env` nhưng repo không có `.env.example`.
+6. README vẫn nhắc tới ZenStack và `schema.zmodel`, nhưng repo không có schema hay dependency ZenStack.
+7. `src/prisma/prisma-hooks.service.ts` không được đăng ký ở module nào (code chết); cập nhật dashboard thực tế được đẩy từ `src/notification/notification.controller.ts`.
+8. `npm run lint` có `--fix`; bước lint trong CI đang bị comment.
 
 ## Chưa xác minh
 
-- CI/CD `deploy.yml` có chạy thành công với các bước ZenStack hay không (chưa xem lịch sử GitHub Actions).
-- `deploy.yml` fallback `pm2 start dist/src/main.js`, trong khi build local sinh `dist/main.js` (và `start:prod` dùng `dist/main`) — chưa rõ cấu trúc `dist/` trên server.
+- Chưa xác minh toàn bộ workflow mới trên GitHub Actions/EC2; lần kiểm tra local dùng `node_modules` hiện có, không chạy `npm ci` sạch hoặc deploy.
 - `npm run test:e2e`: `test/jest-e2e.json` không có `moduleNameMapper` cho `@/` trong khi 21 file trong `src/` import `@/…` — có khả năng lỗi resolve module; chưa chạy.
 - `.env.production` cục bộ dùng bộ tên biến khác code (`JWT_SECRET`, `S3_*` thay vì `JWT_ACCESS_SECRET`, `AWS_*`) — có thể lỗi thời; chưa rõ môi trường production thực sự cấu hình thế nào.
 - Cookie không đặt `domain`: chưa xác minh frontend production (khác subdomain với API) có đọc được `access_token` trong `../testhub-v2/src/proxy.ts` hay không.
@@ -59,16 +58,25 @@
 | `npx jest` | 7/8 suite pass, 62/63 test pass; fail `src/app.controller.spec.ts` (vấn đề 1) |
 | Lint, build, e2e | Chưa chạy |
 
+## Kết quả kiểm tra đã chạy (2026-10-05)
+
+| Lệnh | Kết quả |
+| --- | --- |
+| `prisma generate` với URL PostgreSQL giả | Pass, sinh Prisma Client 7.8.0; không kết nối DB |
+| Jest `--passWithNoTests --runInBand` trước khi sửa test AppController | 7/8 suite, 62/63 test pass; chỉ fail vì thiếu provider `PrismaService` |
+| Jest `--passWithNoTests --runInBand` sau sửa test | Pass 8/8 suite, 63/63 test |
+| `nest build`, TypeScript `--noEmit --incremental false`, ESLint `src/app.controller.spec.ts` | Pass cả ba |
+| Parse YAML workflow, kiểm tra `dist/main.js`, `git diff --check` với CRLF hợp lệ | Pass |
+
 ## Công việc đang làm
 
 Chưa có thông tin.
 
 ## Bước tiếp theo đề xuất
 
-Chưa có thông tin về ưu tiên của người dùng. Các ứng viên dựa trên vấn đề đã xác minh: sửa `app.controller.spec.ts`; thêm xác thực JWT cho gateway `/notifications`; thống nhất secret cho gateway `/exam-runtime`; thêm `.env.example` chỉ chứa tên biến; đồng bộ README/CI với việc không còn ZenStack.
+Các ứng viên còn lại: thêm xác thực JWT cho gateway `/notifications`; thống nhất secret cho gateway `/exam-runtime`; thêm `.env.example` chỉ chứa tên biến; cập nhật README sau khi bỏ ZenStack.
 
 ## Điểm cần làm rõ với người dùng
 
-- ZenStack đã bị bỏ hẳn hay sẽ quay lại? (quyết định cách sửa README và `deploy.yml`)
 - Route `/model/*` mà frontend còn gọi: nên thêm ở backend hay bỏ ở frontend?
-- Quy trình deploy hiện tại có còn dùng `deploy.yml` (EC2 + PM2) không?
+- Quy trình deploy hiện tại có còn dùng `deploy.yml` (EC2 + PM2) không? Chưa chạy deploy để kiểm chứng.
