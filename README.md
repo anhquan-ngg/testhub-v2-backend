@@ -1,5 +1,18 @@
 # TestHub V2 - Backend System
 
+## AI question generation — batches and background worker
+
+Module `src/question-generation/` kiểm tra quyền sở hữu môn/chương, contract
+`text-generation.v1` và gọi FastAPI qua HTTP nội bộ. Cấu hình theo
+[hướng dẫn tích hợp](docs/ai-question-generation.md) và `.env.ai.example`.
+Đã có API tạo lô `POST /question-generation-batches` trả `202`, API đọc trạng thái/
+bản nháp, các bảng AI staging/audit riêng và worker BullMQ chạy độc lập. Có API
+sửa/duyệt theo revision và commit câu đã duyệt vào ngân hàng bằng transaction,
+chống lưu trùng khi gửi lại. Áp dụng hai migration AI local theo hướng dẫn,
+chạy API, FastAPI, Redis, sau đó `npm run build` và `npm run start:ai-worker` ở terminal
+riêng. Frontend: mở ngân hàng câu hỏi → **Sinh câu hỏi bằng AI**, hoặc
+`/{locale}/lecturer/questions/generate`, tạo lô, sửa/duyệt, chọn câu và xác nhận lưu.
+
 <p align="center">
   <a href="https://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

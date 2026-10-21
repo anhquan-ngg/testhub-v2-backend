@@ -2,6 +2,18 @@ import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { DocxQuestionImportParser } from './docx-question-import.parser';
 import { XlsxQuestionImportParser } from './xlsx-question-import.parser';
+import { assertOfficeZipLimits } from '../../common/utils/office-file-signature.util';
+import {
+  QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES,
+  QUESTION_IMPORT_MAX_ZIP_ENTRIES,
+} from '../question-import.constants';
+
+async function checkedTemplate(name: string): Promise<Buffer> {
+  return assertOfficeZipLimits(await readFile(templatePath(name)), {
+    maxEntries: QUESTION_IMPORT_MAX_ZIP_ENTRIES,
+    maxUncompressedBytes: QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES,
+  });
+}
 
 const templatePath = (name: string) =>
   path.resolve(process.cwd(), 'src/question-imports/parsers/fixtures', name);
@@ -10,7 +22,7 @@ describe('question import templates', () => {
   it('parses the published DOCX template including its embedded image', async () => {
     const parser = new DocxQuestionImportParser();
     const questions = await parser.parse(
-      await readFile(templatePath('question-import-template.docx')),
+      await checkedTemplate('question-import-template.docx'),
     );
 
     expect(questions).toHaveLength(3);
@@ -36,7 +48,7 @@ describe('question import templates', () => {
   it('parses the published XLSX template including its embedded image', async () => {
     const parser = new XlsxQuestionImportParser();
     const questions = await parser.parse(
-      await readFile(templatePath('question-import-template.xlsx')),
+      await checkedTemplate('question-import-template.xlsx'),
     );
 
     expect(questions).toHaveLength(3);

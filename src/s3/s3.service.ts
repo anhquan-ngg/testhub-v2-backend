@@ -18,9 +18,11 @@ import { ConfigService } from '@nestjs/config';
 export class S3Service implements OnModuleInit {
   private readonly s3Client: S3Client;
   private readonly bucketName: string;
+  private readonly storageEndpoint: URL;
 
   constructor(private readonly configService: ConfigService) {
-    const s3Region = this.configService.get('AWS_REGION') || 'ap-southeast-1';
+    const s3Region =
+      this.configService.get<string>('AWS_REGION') || 'ap-southeast-1';
     const s3AccessKey = this.configService.get('AWS_ACCESS_KEY_ID');
     const s3SecretKey = this.configService.get('AWS_SECRET_ACCESS_KEY');
 
@@ -33,6 +35,14 @@ export class S3Service implements OnModuleInit {
     });
 
     this.bucketName = this.configService.getOrThrow('AWS_S3_BUCKET_NAME');
+    // Resolve with the same SDK rules as presigning (including dotted buckets).
+    this.storageEndpoint = this.s3Client.config.endpointProvider({
+      Bucket: this.bucketName,
+      Region: s3Region,
+      UseFIPS: false,
+      UseDualStack: false,
+      ForcePathStyle: false,
+    }).url;
   }
 
   async onModuleInit() {
@@ -105,7 +115,7 @@ export class S3Service implements OnModuleInit {
 
   /** Hostname of the bucket, as used by storage URLs and presigned URLs. */
   getStorageHost(): string {
-    return `${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com`;
+    return this.storageEndpoint.hostname;
   }
 
   createStorageUrl(objectName: string): string {
@@ -114,7 +124,7 @@ export class S3Service implements OnModuleInit {
       .map(encodeURIComponent)
       .join('/');
 
-    return `https://${this.getStorageHost()}/${encodedObjectName}`;
+    return `${this.storageEndpoint.href.replace(/\/$/, '')}/${encodedObjectName}`;
   }
 
   async findAll({ path, limit, startAfter }: ListObjectDto) {

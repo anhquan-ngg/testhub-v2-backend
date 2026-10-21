@@ -46,6 +46,7 @@ src/
   exam-runtime/           # trạng thái phòng thi, ping, vi phạm, giám sát, SSE, BullMQ processor, gateway /exam-runtime
   notification/           # gateway Socket.IO /notifications + REST /notification/*
   question-imports/       # import câu hỏi từ .docx/.xlsx (parsers/, queue, processor)
+  question-generation/    # batch/staging, worker FastAPI, review theo revision và approved commit
   exam-print/             # in đề thi bằng puppeteer
   middleware/             # crud.middleware.ts (hiện chỉ gọi next())
 prisma/
@@ -138,6 +139,10 @@ Không có `.env.example` (README nhắc tới nhưng file không tồn tại). 
 
 `PORT`, `NODE_ENV`, `FRONTEND_URL`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES`, `JWT_REFRESH_EXPIRES`, `JWT_SECRET`, `JWT_EXPIRATION` (cấu hình mặc định của `JwtModule` trong `src/auth/auth.module.ts`), `ENCRYPTION_SECRET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME` (bắt buộc, `getOrThrow`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_CALLBACK_URL`.
 
+Luồng thử nghiệm Gemini trực tiếp đã gỡ; Gemini thuộc `../testhub-ai-service`. Module generation có batch/staging, worker FastAPI, review/revision và commit đã duyệt. Xem `docs/ai-question-generation.md` và `.env.ai.example`.
+
+Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
+
 `docker-compose.yaml` còn dùng `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`. Khi thêm biến mới, ghi tên biến vào mục này (không ghi giá trị).
 
 ## 7. Kiểm tra cần chạy theo phạm vi thay đổi
@@ -171,3 +176,33 @@ Ghi kết quả thực tế (lệnh, pass/fail, số lỗi) vào `CONTINUITY.md`
 - `prisma/migrations/*` đã tồn tại — không chỉnh sửa; tạo migration mới thay vì sửa cũ.
 - `package-lock.json` — chỉ thay đổi thông qua `npm install`, không sửa tay.
 - `src/question-imports/parsers/fixtures/*.docx|*.xlsx` — fixture test nhị phân, không sửa trừ khi cập nhật test tương ứng.
+
+## 10. AI batches and dedicated worker (2026-10-19)
+
+- `QuestionGenerationModule` serves cookie/JWT + lecturer-only batch POST (202),
+  status GET and paginated item GET under `/question-generation-batches`.
+- AI business persistence is separate: `QuestionGenerationBatch`,
+  `QuestionGenerationItem`, `QuestionGenerationAttempt`, `QuestionGenerationOutbox`.
+  Never reuse import tables. Only an explicit approved commit transaction may
+  insert generated questions into `Question`.
+- `npm run start:ai-worker` runs the built `dist/question-generation.worker.js` in
+  its own Nest application context. API and worker share the existing DB/Redis/AI
+  settings; the API does not register the AI processor. Apply the additive AI
+  migration before enabling/starting the feature on a target database.
+- Persist batch + outbox in one transaction. Require owner-scoped Idempotency-Key
+  and a canonical request hash. Queue payloads contain only batch UUIDs.
+- One claimed batch permits one FastAPI invocation. Python owns provider retries.
+  Redis delivery and DB persistence retries must never reissue a paid AI call.
+  Reconcile saved results; mark ambiguous interrupted attempts UNKNOWN.
+- Only conditional state/execution-fenced writes may finish/fail a batch. Recheck
+  active lecturer and owned topic/chapter before disclosure and draft persistence.
+- Keep original/current draft JSON and revision separate. VALID is not approval.
+  Edit/review requests require exact revision; edits invalidate approval. Commit
+  accepts only APPROVED revisions, locks the batch first and stores bank rows,
+  item mappings and QuestionGenerationReview audit together. Commit preserves
+  approved revision so retries return the same bank mapping. COMPLETED batches
+  are closed to editing; deleted bank mappings must never be recreated by retry.
+  Retention/cost quotas remain later work.
+- Read `docs/ai-question-generation.md` for migration/demo commands and opt-in
+  `TESTHUB_AI_DATABASE_URL` / `TESTHUB_AI_REDIS_URL` tests. Use disposable loopback
+  services, private test schemas/prefixes, no shared DB reset/Redis flush.
