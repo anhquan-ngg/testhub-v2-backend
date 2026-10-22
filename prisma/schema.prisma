@@ -111,6 +111,7 @@ enum QuestionGenerationBatchStatus {
   REVIEW_REQUIRED
   FAILED
   COMPLETED
+  WAITING_SOURCE
 }
 
 enum QuestionGenerationItemStatus {
@@ -176,6 +177,7 @@ model User {
   questionImports       QuestionImport[]
   questionGenerationBatches QuestionGenerationBatch[]
   questionGenerationReviews QuestionGenerationReview[]
+  learningDocuments LearningDocument[]
 
   @@index([role])
   @@index([status])
@@ -244,6 +246,7 @@ model Topic {
   creator         User             @relation(fields: [created_by], references: [id], onDelete: Cascade)
   questionImports QuestionImport[]
   questionGenerationBatches QuestionGenerationBatch[]
+  learningDocuments LearningDocument[]
 
   @@index([created_by])
   @@map("topics")
@@ -266,6 +269,7 @@ model Chapter {
   defaultQuestionImports QuestionImport[]     @relation("QuestionImportDefaultChapter")
   questionImportItems    QuestionImportItem[] @relation("QuestionImportItemChapter")
   questionGenerationBatches QuestionGenerationBatch[]
+  learningDocuments LearningDocument[]
 
   @@index([topic_id, order])
   @@index([parent_id])
@@ -559,6 +563,14 @@ model QuestionGenerationBatch {
   idempotency_key  String                        @db.VarChar(128)
   request_hash     String                        @db.Char(64)
   source_text      String
+  source_mode      String                        @default("text")
+  source_version_id String?                       @db.Uuid
+  source_index_id   String?                       @db.Uuid
+  source_profile_id String?                       @db.Char(64)
+  source_query      String?
+  preparation_stage String?
+  sourceVersion     LearningDocumentVersion?     @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
+  sourceIndex       LearningDocumentIndex?       @relation(fields: [source_index_id], references: [id], onDelete: NoAction)
   question_type    QuestionType                  @default(SINGLE_CHOICE)
   question_format  QuestionFormat
   requested_count  Int
@@ -593,6 +605,7 @@ model QuestionGenerationItem {
   source_index  Int
   revision      Int                          @default(1)
   original_data Json
+  provenance    Json?
   data          Json
   errors        Json
   warnings      Json
@@ -658,6 +671,117 @@ model QuestionGenerationOutbox {
 
   @@index([next_dispatch_at])
   @@map("question_generation_outbox")
+}
+
+enum LearningDocumentType {
+  PDF
+  PPTX
+}
+
+enum LearningDocumentStatus {
+  UPLOADING
+  QUEUED
+  PROCESSING
+  EXTRACTED
+  OCR_REQUIRED
+  FAILED
+}
+
+model LearningDocument {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  created_by   String   @db.Uuid
+  topic_id     String   @db.Uuid
+  chapter_id   String   @db.Uuid
+  title        String   @db.VarChar(200)
+  is_deleted   Boolean  @default(false)
+  next_version Int      @default(2)
+  creator      User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic        Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  chapter      Chapter  @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  versions     LearningDocumentVersion[]
+
+  @@index([created_by, created_at(sort: Desc)])
+  @@index([topic_id, chapter_id])
+  @@map("learning_documents")
+}
+
+model LearningDocumentVersion {
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  document_id       String                 @db.Uuid
+  version           Int
+  created_at        DateTime               @default(now())
+  updated_at        DateTime               @updatedAt
+  file_name         String                 @db.VarChar(200)
+  source_type       LearningDocumentType
+  mime_type         String
+  declared_size     Int
+  include_notes     Boolean                @default(false)
+  consented_at      DateTime
+  upload_key        String                 @unique
+  upload_expires_at DateTime
+  source_key        String?                @unique
+  source_sha256     String?                @db.Char(64)
+  artifact_key      String?                @unique
+  artifact_sha256   String?                @db.Char(64)
+  parser_version    String?
+  unit_count        Int?
+  warnings          Json?
+  status            LearningDocumentStatus @default(UPLOADING)
+  error_code        String?
+  execution_id      String?                @db.Uuid
+  lease_expires_at  DateTime?
+  extraction_count  Int                    @default(0)
+  next_dispatch_at  DateTime               @default(now())
+  dispatch_count    Int                    @default(0)
+  document          LearningDocument       @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  indexes           LearningDocumentIndex[]
+
+  @@unique([document_id, version])
+  @@index([status, next_dispatch_at])
+  @@index([status, lease_expires_at])
+  @@map("learning_document_versions")
+  generationBatches QuestionGenerationBatch[]
+
+}
+
+enum LearningDocumentIndexStatus {
+  QUEUED
+  INDEXING
+  READY
+  FAILED
+  REVOKED
+}
+
+model LearningDocumentIndex {
+  id                 String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  version_id         String                      @db.Uuid
+  owner_id           String                      @db.Uuid
+  profile_id         String                      @db.Char(64)
+  profile            Json
+  status             LearningDocumentIndexStatus @default(QUEUED)
+  prepared           Boolean                     @default(false)
+  chunk_count        Int                         @default(0)
+  completed_chunks   Int                         @default(0)
+  step_count         Int                         @default(0)
+  failure_count      Int                         @default(0)
+  error_code         String?
+  execution_id       String?                     @db.Uuid
+  lease_expires_at   DateTime?
+  next_dispatch_at   DateTime                    @default(now())
+  dispatch_count     Int                         @default(0)
+  remote_revoked     Boolean                     @default(false)
+  created_at         DateTime                    @default(now())
+  updated_at         DateTime                    @updatedAt
+  version            LearningDocumentVersion     @relation(fields: [version_id], references: [id], onDelete: Cascade)
+
+  @@unique([version_id, profile_id])
+  @@index([status, next_dispatch_at])
+  @@index([status, lease_expires_at])
+  @@map("learning_document_indexes")
+  generationBatches QuestionGenerationBatch[]
+
 }
 
 model Notification {

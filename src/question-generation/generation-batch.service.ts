@@ -1,3 +1,4 @@
+import { DocumentGenerationService } from './document-generation.service';
 import {
   BadRequestException,
   ForbiddenException,
@@ -31,6 +32,7 @@ export class GenerationBatchService {
     private readonly repository: GenerationBatchRepository,
     private readonly generation: QuestionGenerationService,
     @Inject(AI_SERVICE_OPTIONS) private readonly options: AiServiceOptions,
+    private readonly documents: DocumentGenerationService,
   ) {}
 
   /** Persist a command without waiting for Redis, FastAPI or the provider. */
@@ -53,9 +55,16 @@ export class GenerationBatchService {
     await this.storage('authorize_target', () =>
       this.generation.authorizeTarget(actor, command),
     );
+    if (command.source.mode === 'document')
+      await this.storage('authorize_target', () =>
+        this.documents.authorize(actor.id, command),
+      );
     // Explicit canonical order: semantically identical commands have the same hash.
     const canonical = {
-      contract_version: 'text-generation.v1',
+      contract_version:
+        command.source.mode === 'document'
+          ? 'rag-generation.v1'
+          : 'text-generation.v1',
       topic_id: command.topic_id,
       chapter_id: command.chapter_id,
       source: command.source,

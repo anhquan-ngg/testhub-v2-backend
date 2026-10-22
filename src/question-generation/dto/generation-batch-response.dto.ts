@@ -16,6 +16,19 @@ export class AcceptedGenerationBatchDto {
 
 /** Safe polling projection of an owned batch. */
 export class GenerationBatchResponseDto {
+  @ApiProperty({
+    type: Object,
+    nullable: true,
+    description:
+      'Source version metadata: file_name, version, document_id; never storage keys',
+  })
+  sourceVersion: object | null;
+  @ApiProperty({ enum: ['text', 'document'] }) source_mode: string;
+  @ApiProperty({ type: String, format: 'uuid', nullable: true })
+  source_version_id: string | null;
+  @ApiProperty({ type: String, nullable: true }) preparation_stage:
+    | string
+    | null;
   @ApiProperty({ format: 'uuid' }) id: string;
   @ApiProperty({ format: 'uuid' }) topic_id: string;
   @ApiProperty({ format: 'uuid' }) chapter_id: string;
@@ -51,6 +64,13 @@ export class GeneratedQuestionDto {
 }
 
 export class GenerationItemResponseDto {
+  @ApiProperty({
+    type: Object,
+    nullable: true,
+    description:
+      'rag-generation.v1 provenance: profile_id, UNASSESSED quality, citations with exact source chunks and quotes; retained after edits',
+  })
+  provenance: object | null;
   @ApiProperty({ format: 'uuid' }) id: string;
   @ApiProperty() source_index: number;
   @ApiProperty() revision: number;

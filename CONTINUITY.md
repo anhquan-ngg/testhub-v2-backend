@@ -1,8 +1,121 @@
 # CONTINUITY.md — testhub-v2-backend
 
+## Review corrections (2026-10-23)
+
+- RagDispatcher observes queue.client once without blocking reconciliation or shutdown on initial Redis readiness; rejected initialization is handled. GenerationDispatcher already used this pattern and required no change.
+- Revocation errors no longer prevent indexing dispatch. Failed tombstones persist per-row exponential backoff (5 seconds to 5 minutes) using existing failure_count/next_dispatch_at; due revocations are ordered oldest first and acknowledged only after remote success.
+- Source version/index relations and the untracked, not-yet-applied 20261023090000 migration now use NO ACTION, allowing root cascades to complete within one statement while blocking direct referenced-source deletion. No user database migration was executed. Added opt-in PostgreSQL coverage for both Topic/Chapter cascades and direct deletion rejection; it was skipped without a disposable test database.
+- Reviewed all assertOfficeZipLimits call sites: question-import.service already awaits it and sends checkedPackage to both parsers; parser fixture tests also await the checked archive. No ZIP code change was necessary.
+- README and AI/document guides now reflect implemented embedding, retrieval and attached-file generation. Migration inventory verified from disk: 21 migration.sql files, latest 20261023090000_add_document_question_generation.
+- Validation: 25 focused tests passed; full Jest 218 passed / 42 skipped (28 suites passed / 4 skipped, without opt-in HTTP/PostgreSQL/Redis settings). Prisma generate, offline schema SQL diff, TypeScript and Nest build passed. Scoped ESLint passed after correcting two test-only floating-promise warnings. No live DB/S3/Google calls or deployment.
+
+### Verification for file generation (2026-10-23)
+
+- Full Jest with TESTHUB_AI_PYTHON and local document transport simulation:
+  **218 passed, 32 skipped; 28 suites passed, 2 skipped**. Real PostgreSQL/Redis
+  suites were not run. The new opt-in SQL test defines source FK/recovery,
+  evidence-preserving edit, explicit approval and bank commit checks.
+- Nest-to-FastAPI HTTP exercised actual grounded routing/service/validation with
+  synthetic repository/vectors/provider. Unit/controller tests checked consent,
+  ownership/hierarchy, waiting without a paid attempt, evidence/hash rejection and
+  no LLM retry after failed persistence. Existing text/parser/review tests pass.
+- Prisma generate, offline migration diff, Nest build, TypeScript and scoped lint
+  passed. No user DB migration, real S3 mutation or paid provider call was made.
+
+## File-based RAG question generation (2026-10-23)
+
+- The batch API also accepts source.mode=document with immutable version_id and
+  optional query, scoped to the lecturer and selected topic/chapter. The text API
+  contract remains compatible. Read docs/rag-indexing.md section 4 for setup/demo.
+- WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
+  attempt. The AI worker pins one index/profile and promotes only READY sources.
+  The separate document worker still owns extraction/index checkpoints. Preparation
+  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+- Migration 20261023090000_add_document_question_generation adds source FKs and
+  nullable item provenance. It was generated offline, not applied to user DB.
+- DocumentGenerationService authorizes sources before/after internal generation.
+  RagAccessModule shares authorization/index clients without S3 configuration.
+  POST /internal/rag/generate returns rag-generation.v1, with checked evidence.
+- Store provenance separately from editable bank-shaped data. Preserve evidence on
+  edit and flag AI_SOURCE_RECHECK_AFTER_EDIT; a new revision still needs approval.
+  Recovery must retain provenance without reissuing generation. Only the existing
+  approved commit writes Question. Original evidence is not proof of correctness.
+
+### Windows psql setup correction (2026-10-22)
+
+- RAG setup now documents quoted forward-slash paths, SQL Shell working directory,
+  clearing unfinished SQL with `\r`, and verifying bootstrap/role creation before
+  `\password`. Unquoted Windows backslashes can truncate the include filename.
+- Confirmed bootstrap file exists and checked psql syntax against official docs.
+  Documentation only; no database command or migration was executed.
+
+### Verified RAG checks (2026-10-21)
+
+- Full Jest with TESTHUB_AI_PYTHON and TESTHUB_DOCUMENT_SIM_URL: **205 passed,
+  31 skipped; 25 suites passed, 2 skipped**. Skips are real PostgreSQL/Redis suites.
+- New tests cover whole-scope authorization, changed source hashes, current-profile
+  readiness, post-I/O revocation, role guards, one-step checkpoints and bounded
+  failures. Real Node -> FastAPI covers chunk prepare/index/retrieve/revoke with
+  synthetic vectors/storage. Existing PDF/PPTX parser and text contract also pass.
+- Prisma generate/offline migration diff and Nest production build passed.
+  Scoped feature ESLint passed. No database migration, paid AI call, S3 mutation,
+  deployment or commit performed. Real pgvector/DB/Redis/browser E2E not established.
+
+## Current RAG implementation (2026-10-21)
+
+- LearningDocumentIndex is a separate business model. Additive migration
+  `20261021100000_add_document_indexes` was created offline; do not auto-apply.
+- RagController/RagService own lecturer index start/retry/retrieve. Reject an entire
+  foreign/revoked/not-READY version set before paid calls; recheck after I/O.
+  Browser cannot choose owner/profile/index IDs. No bank write occurs in retrieval.
+- `start:document-worker` also owns the separate ai-document-indexing queue.
+  One bounded prepare/embed checkpoint per delivery, DB outbox, execution/lease
+  fences and durable progress. SDK/HTTP retry nesting is prohibited. Preserve the
+  Python invocation budget across explicit retries; exactly-once billing is not promised.
+- Revoke business indexes in the same document transaction, then dispatch technical
+  tombstones even for inaccessible documents. Do not promise physical deletion.
+- AI_RAG_ENABLED defaults false and depends on existing AI integration config.
+  Google key and dedicated rag database credentials stay only in Python.
+- Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
+  limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
+
 > Trạng thái và bàn giao giữa các phiên làm việc. Đọc trước khi làm việc; cập nhật sau mỗi nhiệm vụ có thay đổi đáng kể.
 
-**Cập nhật lần cuối:** 2026-10-19 — bổ sung chẩn đoán an toàn cho lỗi AI staging storage; chưa xác định nguyên nhân database runtime từ log cũ.
+**Cập nhật lần cuối:** 2026-10-23 — bàn giao sinh câu hỏi từ tệp/RAG và sửa review dispatcher, khóa ngoại nguồn; chưa áp migration vào database người dùng.
+
+## Learning documents và extraction (2026-10-21)
+
+- `src/learning-documents/`: API lecturer/owner-scoped tạo tài liệu và phiên bản,
+  upload ký sẵn, complete/replay trả 202, metadata/polling, content phân trang,
+  thu hồi quyền truy cập. Zod kiểm tra raw input, consent và loại/size file.
+- Hai bảng LearningDocument/LearningDocumentVersion và migration cộng thêm
+  `20261021090000_add_learning_documents` được tạo offline từ schema diff.
+  Prisma generate đã chạy; không migrate/reset database hay dùng S3 thật.
+- Complete đọc bytes thực có giới hạn, pin hash và bản nguồn cố định trước khi
+  chuyển UPLOADING→QUEUED. QUEUED version là durable outbox; reconciliation/queue
+  delivery không mất tác vụ khi Redis lỗi. Có claim/execution UUID/lease/retry tối đa 3.
+- Worker riêng `npm run start:document-worker`, queue `ai-document-processing`,
+  concurrency 1. NestJS gửi bytes qua internal HTTP, Python xử lý process con.
+  Metadata gồm SHA-256 nguồn/artifact, contract và phiên bản parser thực tế.
+- EXTRACTED khác OCR_REQUIRED và chưa phải RAG READY. Artifact text nằm trong S3
+  private; business metadata trong PostgreSQL. Chưa có chunking/embedding/retrieval.
+- Chặn namespace learning-documents/ tại mọi legacy /s3/* signing/upload/delete
+  và lọc root listings, tránh bypass owner API. Không thay đổi phân quyền file cũ.
+- Đọc `docs/learning-documents.md` cho migration/local/demo, contract, giới hạn và
+  retention còn mở. `.env.ai.example` thêm DOCUMENT_SERVICE_TIMEOUT_MS=55000.
+- Đã có unit/HTTP guard-validation-safe-error tests, Postman local simulation
+  cho transport failure, HTTP thật Nest→FastAPI→PDF/PPTX parser và opt-in PostgreSQL
+  tests. Docker daemon hiện chưa chạy nên bộ PostgreSQL/Redis opt-in chưa chạy
+  trong phiên này; không coi mock/build là bằng chứng live S3 hoặc DB runtime.
+- Kết quả cuối: **191 Jest pass, 30 skip; 23 suites pass, 2 skip**, gồm bật cả
+  TESTHUB_AI_PYTHON và TESTHUB_DOCUMENT_SIM_URL. Hai suite skip là PostgreSQL/Redis
+  vì chưa có test services. HTTP thật PDF/PPTX và fake-LLM contract đều pass.
+  Một lượt trước có lỗi kết nối PDF ở test tạo fixture đồng bộ; đổi fixture sang
+  execFile async rồi chạy lại toàn bộ thành công. Không thêm retry cho text LLM.
+- Prisma generate, TypeScript, Nest build và ESLint phần mới/controller sửa pass.
+  `s3.service.ts` có 8 lỗi lint tồn đọng: so với HEAD bằng ESLint lintText/lintFiles
+  vẫn đúng 8 lỗi, không thêm message mới. Diff whitespace pass. Chưa build Docker
+  hoặc chạy live browser/S3/user DB. Không sửa các file .env thật.
 
 ## Cách cập nhật file này
 
@@ -15,7 +128,7 @@
 
 - Nhánh `dev`, đồng bộ với `origin/dev` khi khảo sát; working tree sạch trước khi thêm 3 file tài liệu này. Commit mới nhất: `0f87eba` (2026-09-29) — chapter update logic, giới hạn zip khi import.
 - Module đăng ký trong `src/app.module.ts`: Encryption, Auth, Prisma, S3, Notification, ExamRuntime, Submission, Users, Topics, Chapters, Questions, Exams, ExamRegistrations, Files, QuestionImport, ExamPrint, QuestionGeneration.
-- `prisma/migrations/` có 18 migration; mới nhất `20261019100000_add_ai_review_commit`. Hai migration AI chỉ được kiểm thử trên PostgreSQL tạm, chưa áp lên DB local/production hiện có.
+- `prisma/migrations/` có 21 migration; mới nhất `20261023090000_add_document_question_generation`, gồm các migration tài liệu `20261021090000_add_learning_documents` và RAG `20261021100000_add_document_indexes`. Các migration mới được tạo offline, chưa áp lên DB người dùng; trạng thái DB local/production hiện tại chưa xác minh.
 - Tính năng gần đây theo git log: import câu hỏi từ .docx/.xlsx (`src/question-imports/`), giám sát phòng thi (`src/exam-runtime/exam-monitor-aggregator.service.ts`), thứ tự câu hỏi trong bài làm, in đề (`src/exam-print/`).
 
 ## Quyết định kiến trúc đã thể hiện trong code

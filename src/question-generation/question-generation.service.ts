@@ -2,7 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { z } from 'zod';
 import { AiQuestionClient } from './ai-question-client.service';
-import { textGenerationCommandSchema } from './question-generation.contract';
+import { generationCommandSchema } from './question-generation.contract';
 import type { GeneratedQuestion } from './question-generation.contract';
 import { QuestionGenerationException } from './question-generation.errors';
 import { QuestionGenerationRepository } from './question-generation.repository';
@@ -29,7 +29,7 @@ export class QuestionGenerationService {
 
   /** Validate untrusted commands without relying on implicit DTO coercion. */
   parseCommand(input: unknown) {
-    const command = textGenerationCommandSchema.safeParse(input);
+    const command = generationCommandSchema.safeParse(input);
     if (!command.success) {
       if (
         command.error.issues.some(
@@ -86,6 +86,7 @@ export class QuestionGenerationService {
   ): Promise<GeneratedDrafts> {
     const command = this.parseCommand(input);
     const owned = await this.authorizeTarget(actor, command);
+    if (command.source.mode !== 'text') throw this.invalidRequest();
     const result = await this.client.generate({
       text: command.source.text,
       topic: Array.from(owned.topic.name.trim()).slice(0, 200).join('') || null,
@@ -105,7 +106,7 @@ export class QuestionGenerationService {
     return new QuestionGenerationException(
       'AI_REQUEST_INVALID',
       HttpStatus.BAD_REQUEST,
-      'Invalid text question generation command',
+      'Invalid question generation command',
     );
   }
 }

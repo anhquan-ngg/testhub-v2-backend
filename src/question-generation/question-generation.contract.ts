@@ -16,7 +16,7 @@ const optionSchema = z
   .object({ text: boundedText(1, 500), isCorrect: z.boolean() })
   .strict();
 
-export const generatedQuestionSchema = z
+export const generatedQuestionBaseSchema = z
   .object({
     question_text: boundedText(1, 2_000),
     options: z.array(optionSchema).length(4),
@@ -24,7 +24,9 @@ export const generatedQuestionSchema = z
     question_format: z.nativeEnum(QuestionFormat),
     correct_answer: z.null(),
   })
-  .strict()
+  .strict();
+
+export const generatedQuestionSchema = generatedQuestionBaseSchema
   .refine(
     ({ options }) => options.filter((option) => option.isCorrect).length === 1,
   )
@@ -55,13 +57,22 @@ export const aiGenerateResponseSchema = z
   );
 
 /** Frozen text command shared by the authenticated batch API and worker. */
-export const textGenerationCommandSchema = z
+export const generationCommandSchema = z
   .object({
     topic_id: z.string().uuid(),
     chapter_id: z.string().uuid(),
-    source: z
-      .object({ mode: z.literal('text'), text: boundedText(20, 20_000) })
-      .strict(),
+    source: z.discriminatedUnion('mode', [
+      z
+        .object({ mode: z.literal('text'), text: boundedText(20, 20_000) })
+        .strict(),
+      z
+        .object({
+          mode: z.literal('document'),
+          version_id: z.string().uuid(),
+          query: boundedText(0, 400).default(''),
+        })
+        .strict(),
+    ]),
     question_type: z.literal(QuestionType.SINGLE_CHOICE),
     question_format: z.nativeEnum(QuestionFormat),
     count: z.number().int().min(1).max(20),
@@ -70,6 +81,12 @@ export const textGenerationCommandSchema = z
   })
   .strict();
 
+export const textGenerationCommandSchema = generationCommandSchema.extend({
+  source: z
+    .object({ mode: z.literal('text'), text: boundedText(20, 20_000) })
+    .strict(),
+});
+export type GenerationCommand = z.infer<typeof generationCommandSchema>;
 export type TextGenerationCommand = z.infer<typeof textGenerationCommandSchema>;
 export type AiGenerateRequest = z.infer<typeof aiGenerateRequestSchema>;
 export type AiGenerateResponse = z.infer<typeof aiGenerateResponseSchema>;
@@ -79,6 +96,7 @@ export type GeneratedQuestion = z.infer<typeof generatedQuestionSchema>;
 // states are defined by Prisma's QuestionGenerationBatchStatus; do not infer
 // implemented transitions from this larger frontend-facing reserved list.
 export const GENERATION_BATCH_STATUSES = [
+  'WAITING_SOURCE',
   'QUEUED',
   'GENERATING',
   'RETRY_WAIT',

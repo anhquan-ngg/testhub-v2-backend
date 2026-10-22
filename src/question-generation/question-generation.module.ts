@@ -1,3 +1,5 @@
+import { RagAccessModule } from '../learning-documents/rag-access.module';
+import { DocumentGenerationService } from './document-generation.service';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -17,7 +19,7 @@ import { GenerationReviewService } from './generation-review.service';
 
 /** Public batch API and persistence; queue execution lives in the worker module. */
 @Module({
-  imports: [ConfigModule, PrismaModule],
+  imports: [ConfigModule, PrismaModule, RagAccessModule],
   controllers: [GenerationBatchController],
   providers: [
     {
@@ -38,6 +40,7 @@ import { GenerationReviewService } from './generation-review.service';
     AiQuestionClient,
     QuestionGenerationRepository,
     QuestionGenerationService,
+    DocumentGenerationService,
     GenerationBatchRepository,
     GenerationBatchService,
     GenerationReviewRepository,
@@ -45,6 +48,7 @@ import { GenerationReviewService } from './generation-review.service';
   ],
   exports: [
     QuestionGenerationService,
+    DocumentGenerationService,
     GenerationBatchRepository,
     AI_SERVICE_OPTIONS,
   ],

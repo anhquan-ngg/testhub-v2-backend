@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiCookieAuth,
+  ApiExtraModels,
   ApiBody,
   ApiHeader,
   ApiOperation,
@@ -28,7 +29,11 @@ import { UserRole } from '@prisma/client';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { CreateGenerationBatchDto } from './dto/create-generation-batch.dto';
+import {
+  CreateGenerationBatchDto,
+  TextGenerationSourceDto,
+  DocumentGenerationSourceDto,
+} from './dto/create-generation-batch.dto';
 import {
   AcceptedGenerationBatchDto,
   GenerationBatchResponseDto,
@@ -51,6 +56,7 @@ import {
 type AuthenticatedRequest = Request & { user: GenerationActor };
 
 /** Lecturer-owned commands and polling resources for AI staging. */
+@ApiExtraModels(TextGenerationSourceDto, DocumentGenerationSourceDto)
 @ApiTags('Question generation')
 @ApiCookieAuth('access_token')
 @UseGuards(JwtGuard, RolesGuard)
@@ -147,7 +153,8 @@ export class GenerationBatchController {
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
-    summary: 'Queue text question generation for lecturer review',
+    summary:
+      'Queue text or uploaded-document RAG question generation for review',
   })
   @ApiHeader({
     name: 'Idempotency-Key',

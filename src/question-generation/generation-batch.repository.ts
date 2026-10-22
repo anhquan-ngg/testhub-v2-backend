@@ -1,3 +1,4 @@
+import type { QuestionProvenance } from './grounded-generation.contract';
 import { ConflictException, Injectable } from '@nestjs/common';
 import {
   Prisma,
@@ -9,7 +10,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
-  TextGenerationCommand,
+  GenerationCommand,
   GeneratedQuestion,
 } from './question-generation.contract';
 import {
@@ -24,6 +25,12 @@ const publicBatchSelect = {
   status: true,
   question_type: true,
   question_format: true,
+  sourceVersion: {
+    select: { file_name: true, version: true, document_id: true },
+  },
+  source_mode: true,
+  source_version_id: true,
+  preparation_stage: true,
   requested_count: true,
   total_items: true,
   error_code: true,
@@ -41,6 +48,20 @@ export class GenerationBatchRepository {
   ownerScope(ownerId: string): Prisma.QuestionGenerationBatchWhereInput {
     return {
       created_by: ownerId,
+      OR: [
+        { source_mode: 'text' },
+        {
+          source_mode: 'document',
+          sourceVersion: {
+            document: {
+              created_by: ownerId,
+              is_deleted: false,
+              topic: { created_by: ownerId, is_deleted: false },
+              chapter: { is_deleted: false },
+            },
+          },
+        },
+      ],
       creator: { role: UserRole.LECTURER, status: UserStatus.ACTIVE },
       topic: { created_by: ownerId, is_deleted: false },
       chapter: {
@@ -55,7 +76,7 @@ export class GenerationBatchRepository {
     ownerId: string;
     key: string;
     hash: string;
-    command: TextGenerationCommand;
+    command: GenerationCommand;
   }) {
     const { ownerId, key, hash, command } = input;
     try {
@@ -81,6 +102,24 @@ export class GenerationBatchRepository {
           throw new ConflictException(
             'Generation target is no longer available',
           );
+        if (command.source.mode === 'document') {
+          const version = await tx.learningDocumentVersion.findFirst({
+            where: {
+              id: command.source.version_id,
+              status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] },
+              document: {
+                created_by: ownerId,
+                is_deleted: false,
+                topic_id: command.topic_id,
+                chapter_id: command.chapter_id,
+              },
+            },
+          });
+          if (!version)
+            throw new ConflictException(
+              'Document source is no longer available',
+            );
+        }
         return tx.questionGenerationBatch.create({
           data: {
             id: randomUUID(),
@@ -89,7 +128,21 @@ export class GenerationBatchRepository {
             chapter_id: command.chapter_id,
             idempotency_key: key,
             request_hash: hash,
-            source_text: command.source.text,
+            source_text:
+              command.source.mode === 'text' ? command.source.text : '',
+            source_mode: command.source.mode,
+            contract_version:
+              command.source.mode === 'document'
+                ? 'rag-generation.v1'
+                : 'text-generation.v1',
+            ...(command.source.mode === 'document'
+              ? {
+                  source_version_id: command.source.version_id,
+                  source_query: command.source.query,
+                  status: BatchStatus.WAITING_SOURCE,
+                  preparation_stage: 'EXTRACTING',
+                }
+              : {}),
             question_type: command.question_type,
             question_format: command.question_format,
             requested_count: command.count,
@@ -174,6 +227,7 @@ export class GenerationBatchRepository {
             revision: true,
             status: true,
             data: true,
+            provenance: true,
             errors: true,
             warnings: true,
             reviewed_by: true,
@@ -227,6 +281,7 @@ export class GenerationBatchRepository {
     id: string,
     executionId: string,
     questions: GeneratedQuestion[],
+    provenance?: QuestionProvenance[],
   ) {
     const saved = await this.prisma.questionGenerationAttempt.updateMany({
       where: {
@@ -235,7 +290,12 @@ export class GenerationBatchRepository {
         status: AttemptStatus.RUNNING,
         batch: { status: BatchStatus.GENERATING, execution_id: executionId },
       },
-      data: { result: { questions } satisfies Prisma.InputJsonObject },
+      data: {
+        result: {
+          questions,
+          ...(provenance ? { provenance } : {}),
+        } satisfies Prisma.InputJsonObject,
+      },
     });
     if (!saved.count)
       throw new ConflictException('Generation execution is no longer active');
@@ -247,18 +307,52 @@ export class GenerationBatchRepository {
     executionId: string,
     ownerId: string,
     questions: GeneratedQuestion[],
+    provenance?: QuestionProvenance[],
   ) {
     await this.prisma.$transaction(async (tx) => {
       const batch = await tx.questionGenerationBatch.findUnique({
         where: { id },
-        select: { topic_id: true },
+        select: {
+          topic_id: true,
+          source_mode: true,
+          source_version_id: true,
+          source_index_id: true,
+          source_profile_id: true,
+        },
       });
       if (!batch)
         throw new ConflictException('Generation batch no longer exists');
+      if (
+        batch.source_mode === 'document' &&
+        (!provenance ||
+          provenance.length !== questions.length ||
+          !batch.source_index_id ||
+          !batch.source_version_id ||
+          !batch.source_profile_id ||
+          provenance.some(
+            (p) =>
+              p.profile_id !== batch.source_profile_id ||
+              p.citations.some(
+                (c) =>
+                  c.chunk.version_id !== batch.source_version_id ||
+                  c.chunk.index_id !== batch.source_index_id,
+              ),
+          ))
+      )
+        throw new ConflictException('Source evidence is no longer valid');
       const changed = await tx.questionGenerationBatch.updateMany({
         where: {
           id,
           ...this.ownerScope(ownerId),
+          ...(batch.source_mode === 'document'
+            ? {
+                sourceIndex: {
+                  status: 'READY',
+                  version_id: batch.source_version_id ?? undefined,
+                  profile_id: batch.source_profile_id ?? undefined,
+                },
+              }
+            : {}),
           chapter: { is_deleted: false, topic_id: batch.topic_id },
           status: BatchStatus.GENERATING,
           execution_id: executionId,
@@ -281,6 +375,7 @@ export class GenerationBatchRepository {
           source_index: index + 1,
           original_data: question,
           data: question,
+          ...(provenance ? { provenance: provenance[index] } : {}),
           errors: [],
           warnings: [],
           fingerprint: createHash('sha256')
@@ -323,6 +418,70 @@ export class GenerationBatchRepository {
     });
   }
 
+  /** Prepare sources without claiming a paid LLM attempt. Conditional writes fence duplicate jobs. */
+  async prepared(
+    id: string,
+    owner: string,
+    result: {
+      ready: boolean;
+      stage: string;
+      index: { id: string; profile_id: string } | null;
+    },
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const changed = await tx.questionGenerationBatch.updateMany({
+        where: {
+          id,
+          status: BatchStatus.WAITING_SOURCE,
+          AND: [
+            this.ownerScope(owner),
+            ...(result.index
+              ? [
+                  {
+                    OR: [
+                      { source_index_id: null },
+                      { source_index_id: result.index.id },
+                    ],
+                  },
+                ]
+              : []),
+          ],
+        },
+        data: {
+          status: result.ready
+            ? BatchStatus.QUEUED
+            : BatchStatus.WAITING_SOURCE,
+          preparation_stage: result.stage,
+          ...(result.index
+            ? {
+                source_index_id: result.index.id,
+                source_profile_id: result.index.profile_id,
+              }
+            : {}),
+        },
+      });
+      if (changed.count)
+        await tx.questionGenerationOutbox.updateMany({
+          where: { batch_id: id },
+          data: {
+            next_dispatch_at: new Date(Date.now() + (result.ready ? 0 : 15000)),
+          },
+        });
+      return changed;
+    });
+  }
+  /** Terminal preparation errors do not create an attempt or invoke the LLM. */
+  failPreparation(id: string, code: string) {
+    return this.prisma.questionGenerationBatch.updateMany({
+      where: { id, status: BatchStatus.WAITING_SOURCE },
+      data: {
+        status: BatchStatus.FAILED,
+        error_code: code,
+        finished_at: new Date(),
+      },
+    });
+  }
+
   /** Reconcile only expired executions; never reissue an ambiguous provider call. */
   staleExecutions() {
     return this.prisma.questionGenerationBatch.findMany({
@@ -341,7 +500,9 @@ export class GenerationBatchRepository {
     return this.prisma.questionGenerationOutbox.findMany({
       where: {
         next_dispatch_at: { lte: new Date() },
-        batch: { status: BatchStatus.QUEUED },
+        batch: {
+          status: { in: [BatchStatus.QUEUED, BatchStatus.WAITING_SOURCE] },
+        },
       },
       orderBy: { next_dispatch_at: 'asc' },
       take: AI_RECONCILE_PAGE_SIZE,

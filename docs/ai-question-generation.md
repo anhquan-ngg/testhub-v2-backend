@@ -1,5 +1,14 @@
 # Text question generation: batches, staging and background execution
 
+## Uploaded-document RAG update (2026-10-23)
+
+The generation UI now attaches PDF/PPTX and the same batch API also accepts
+source.mode=document with an immutable version_id and optional knowledge query.
+The AI worker coordinates extraction/index readiness before generating cited drafts.
+See [RAG file generation setup and contract](rag-indexing.md#4-generate-questions-directly-from-an-attached-file-2026-10-23),
+including the new business migration and both worker processes. Existing text API
+contracts and the review/approval/commit flow remain available.
+
 Implemented: generation, persisted batches, lecturer review and approved commit,
 using `text-generation.v1`. `QuestionGenerationModule`
 exposes lecturer-owned batch creation and polling. A dedicated Nest application
@@ -52,8 +61,10 @@ The frontend mirror is `../testhub-v2/src/types/question-generation.ts`.
 Runtime validation is strict: no numeric/string/boolean coercion or extra fields;
 UUID target IDs; trimmed text of 20–20,000 Unicode code points; count 1–20;
 `KNOWLEDGE | UNDERSTANDING | APPLYING | ADVANCED`; Vietnamese single-choice only.
-Document mode, learning objectives and other question types are rejected until
-their behavior exists. Explicit consent is required before text disclosure.
+Document mode is implemented with an immutable version_id and optional query;
+see [file generation](rag-indexing.md#4-generate-questions-directly-from-an-attached-file-2026-10-23).
+Learning objectives and other question types remain unsupported. Explicit consent
+is required before source content or queries are disclosed.
 The batch stores the source snapshot and a `consented_at` timestamp.
 
 Authenticated batch API: `POST /question-generation-batches`, returning
@@ -63,7 +74,7 @@ the service schema (the current global pipe enables implicit conversion).
 No synchronous generation route is added for this milestone: browser Axios has a
 10-second timeout, while generation may take 30 seconds.
 
-Persisted batch states are `QUEUED`, `GENERATING`, `REVIEW_REQUIRED`, `FAILED`,
+Persisted batch states are `WAITING_SOURCE`, `QUEUED`, `GENERATING`, `REVIEW_REQUIRED`, `FAILED`,
 `COMPLETED`. Item states are `VALID`, `APPROVED`, `INVALID`, `REJECTED`, `COMMITTED`,
 `SKIPPED`; the worker creates only `VALID` items after strict output validation.
 `APPROVED` is an explicit lecturer decision; `VALID` is not approval. The frontend
@@ -444,5 +455,6 @@ Labels support vi/en; generated content remains Vietnamese. Unsaved edits disabl
 commit; changed item revisions clear their selection. Failed creation requests
 reuse the same key for identical normalized input within the mounted page. A
 browser reload loses this in-memory key: inspect recent batches before submitting
-again after an ambiguous creation. Document/RAG UI and operational quotas are not
-included in this release.
+again after an ambiguous creation. The Document/RAG UI supports PDF/PPTX attachments,
+preparation polling and draft review; see [file generation](rag-indexing.md#4-generate-questions-directly-from-an-attached-file-2026-10-23).
+Operational quotas remain outside this release.

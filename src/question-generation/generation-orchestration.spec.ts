@@ -1,3 +1,4 @@
+import { DocumentGenerationService } from './document-generation.service';
 import { Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
@@ -109,6 +110,7 @@ describe('Generation orchestration failure boundaries', () => {
       repository as unknown as GenerationBatchRepository,
       generation as unknown as QuestionGenerationService,
       { enabled: false },
+      {} as DocumentGenerationService,
     );
     await expect(
       service.create(
@@ -133,6 +135,7 @@ describe('Generation orchestration failure boundaries', () => {
       repository as unknown as GenerationBatchRepository,
       generation as unknown as QuestionGenerationService,
       enabled,
+      {} as DocumentGenerationService,
     );
     await expect(
       service.create(
@@ -160,6 +163,7 @@ describe('Generation orchestration failure boundaries', () => {
         repository as unknown as GenerationBatchRepository,
         {} as QuestionGenerationService,
         enabled,
+        {} as DocumentGenerationService,
       );
       await expect(
         service.list({ id: 'actor', role: 'LECTURER' }),
@@ -180,6 +184,7 @@ describe('Generation orchestration failure boundaries', () => {
       repository as unknown as GenerationBatchRepository,
       {} as QuestionGenerationService,
       enabled,
+      {} as DocumentGenerationService,
     );
     const cases = [
       {
@@ -250,6 +255,7 @@ describe('Generation orchestration failure boundaries', () => {
     const execution = new GenerationExecutionService(
       repository as unknown as GenerationBatchRepository,
       generation as unknown as QuestionGenerationService,
+      {} as DocumentGenerationService,
     );
     await expect(execution.process('batch')).rejects.toThrow(
       'AI persistence deferred',

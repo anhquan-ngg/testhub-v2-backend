@@ -1,5 +1,59 @@
 # AGENTS.md — testhub-v2-backend
 
+## File-based RAG question generation (2026-10-23)
+
+- The batch API also accepts source.mode=document with immutable version_id and
+  optional query, scoped to the lecturer and selected topic/chapter. The text API
+  contract remains compatible. Read docs/rag-indexing.md section 4 for setup/demo.
+- WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
+  attempt. The AI worker pins one index/profile and promotes only READY sources.
+  The separate document worker still owns extraction/index checkpoints. Preparation
+  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+- Migration 20261023090000_add_document_question_generation adds source FKs and
+  nullable item provenance. It was generated offline, not applied to user DB.
+- DocumentGenerationService authorizes sources before/after internal generation.
+  RagAccessModule shares authorization/index clients without S3 configuration.
+  POST /internal/rag/generate returns rag-generation.v1, with checked evidence.
+- Store provenance separately from editable bank-shaped data. Preserve evidence on
+  edit and flag AI_SOURCE_RECHECK_AFTER_EDIT; a new revision still needs approval.
+  Recovery must retain provenance without reissuing generation. Only the existing
+  approved commit writes Question. Original evidence is not proof of correctness.
+
+## Current RAG implementation (2026-10-21)
+
+- LearningDocumentIndex is a separate business model. Additive migration
+  `20261021100000_add_document_indexes` was created offline; do not auto-apply.
+- RagController/RagService own lecturer index start/retry/retrieve. Reject an entire
+  foreign/revoked/not-READY version set before paid calls; recheck after I/O.
+  Browser cannot choose owner/profile/index IDs. No bank write occurs in retrieval.
+- `start:document-worker` also owns the separate ai-document-indexing queue.
+  One bounded prepare/embed checkpoint per delivery, DB outbox, execution/lease
+  fences and durable progress. SDK/HTTP retry nesting is prohibited. Preserve the
+  Python invocation budget across explicit retries; exactly-once billing is not promised.
+- Revoke business indexes in the same document transaction, then dispatch technical
+  tombstones even for inaccessible documents. Do not promise physical deletion.
+- AI_RAG_ENABLED defaults false and depends on existing AI integration config.
+  Google key and dedicated rag database credentials stay only in Python.
+- Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
+  limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
+
+## Learning document ingestion (2026-10-21)
+
+- `learning-documents/` owns separate LearningDocument/LearningDocumentVersion
+  tables. FileType and import staging are not reused. Migration:
+  `20261021090000_add_learning_documents`; do not apply to the user's DB automatically.
+- `/learning-documents` is cookie/JWT + lecturer guarded and owner scoped.
+  Complete freezes actual checked bytes before conditional UPLOADING→QUEUED;
+  never process a mutable upload key. Require explicit consent and notes opt-in.
+- `npm run start:document-worker` owns separate `ai-document-processing` jobs.
+  Queued versions form a durable outbox. Fence claims/results by execution UUID,
+  lease and current ownership. No paid calls occur in extraction.
+- Only Python extracts PDF/PPTX; send bounded bytes, never an arbitrary URL.
+  Preserve source hash and PAGE/SLIDE/NOTES. EXTRACTED/OCR_REQUIRED are not a RAG index.
+- Block `learning-documents/` keys in legacy `/s3/*` routes and root listings;
+  otherwise those endpoints bypass document ownership. Do not log source bodies.
+- See `docs/learning-documents.md` for setup, limits, retention gaps and opt-in tests.
+
 Hướng dẫn chung cho mọi AI agent (Claude Code, Codex, Cursor, Copilot…) làm việc trong repo này. Nội dung dựa trên code và cấu hình thực tế tại thời điểm viết; khi thấy tài liệu lệch với code, tin code và cập nhật lại file này.
 
 ## 0. Trước khi làm việc

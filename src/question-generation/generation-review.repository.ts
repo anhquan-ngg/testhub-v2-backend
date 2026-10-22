@@ -28,6 +28,7 @@ const itemSelect = {
   revision: true,
   status: true,
   data: true,
+  provenance: true,
   errors: true,
   warnings: true,
   question_id: true,
@@ -130,7 +131,7 @@ export class GenerationReviewRepository {
           reviewed_by: null,
           reviewed_at: null,
           errors: [],
-          warnings: [],
+          warnings: before.provenance ? ['AI_SOURCE_RECHECK_AFTER_EDIT'] : [],
           fingerprint: createHash('sha256')
             .update(JSON.stringify(input.data))
             .digest('hex'),

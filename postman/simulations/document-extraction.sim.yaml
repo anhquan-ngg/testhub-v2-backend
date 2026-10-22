@@ -1,0 +1,5 @@
+simulation: document-extraction
+routing: path
+mocks:
+  - routeKey: internal
+    path: ../mocks/document-extraction/config.yaml

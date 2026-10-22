@@ -1,3 +1,4 @@
+import { DocumentGenerationService } from './document-generation.service';
 import {
   ExecutionContext,
   INestApplication,
@@ -10,7 +11,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { Queue, Worker } from 'bullmq';
 import request from 'supertest';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
@@ -208,6 +209,7 @@ integration(
       execution = new GenerationExecutionService(
         repository,
         module.get(QuestionGenerationService),
+        module.get(DocumentGenerationService),
       );
       const processor = new GenerationProcessor(execution, options);
       const parsedRedis = new URL(redisUrl);
@@ -990,6 +992,144 @@ integration(
         .send({ items: [approved] })
         .expect(409);
       expect(await prisma.question.count()).toBe(before);
+    });
+
+    it('recovers cited document output, preserves evidence after edit and commits only approved data', async () => {
+      const sourceHash = 'd'.repeat(64),
+        profile = 'e'.repeat(64),
+        documentId = randomUUID(),
+        version = randomUUID();
+      await prisma.learningDocument.create({
+        data: {
+          id: documentId,
+          created_by: actor.id,
+          topic_id: command.topic_id,
+          chapter_id: command.chapter_id,
+          title: 'RAG fixture',
+          versions: {
+            create: {
+              id: version,
+              version: 1,
+              file_name: 'stack.pdf',
+              source_type: 'PDF',
+              mime_type: 'application/pdf',
+              declared_size: 100,
+              consented_at: new Date(),
+              upload_key: randomUUID(),
+              upload_expires_at: new Date(Date.now() + 3600000),
+              status: 'EXTRACTED',
+              source_sha256: sourceHash,
+            },
+          },
+        },
+      });
+      const index = await prisma.learningDocumentIndex.create({
+        data: {
+          version_id: version,
+          owner_id: actor.id,
+          profile_id: profile,
+          profile: { model: 'fixture' },
+          status: 'READY',
+          prepared: true,
+          chunk_count: 1,
+          completed_chunks: 1,
+        },
+      });
+      const accepted = await repository.create({
+        ownerId: actor.id,
+        key: randomUUID(),
+        hash: 'f'.repeat(64),
+        command: {
+          ...command,
+          source: { mode: 'document', version_id: version, query: 'Stack' },
+        },
+      });
+      expect(accepted.status).toBe('WAITING_SOURCE');
+      await repository.prepared(accepted.id, actor.id, {
+        ready: true,
+        stage: 'READY',
+        index,
+      });
+      const token = await repository.claim(accepted.id);
+      if (!token) throw new Error('Missing execution');
+      const text = 'A stack uses LIFO.';
+      const provenance = [
+        {
+          contract_version: 'rag-generation.v1' as const,
+          profile_id: profile,
+          quality_status: 'UNASSESSED' as const,
+          citations: [
+            {
+              quote: 'LIFO',
+              chunk: {
+                chunk_id: randomUUID(),
+                ordinal: 0,
+                kind: 'PAGE' as const,
+                position: 1,
+                start_offset: 0,
+                end_offset: text.length,
+                text,
+                text_sha256: createHash('sha256').update(text).digest('hex'),
+                index_id: index.id,
+                document_id: documentId,
+                version_id: version,
+                source_sha256: sourceHash,
+                similarity: 1,
+              },
+            },
+          ],
+        },
+      ];
+      const questions = fixture.internal_response.questions;
+      await repository.saveResult(accepted.id, token, questions, provenance);
+      await prisma.questionGenerationBatch.update({
+        where: { id: accepted.id },
+        data: { lease_expires_at: new Date(0) },
+      });
+      await execution.recover(accepted.id);
+      const page = await batches.items(actor, accepted.id);
+      const item = page.data[0];
+      expect(item.provenance).toEqual(provenance[0]);
+      const edit = await request(http)
+        .patch(`/question-generation-batches/${accepted.id}/items/${item.id}`)
+        .send({
+          revision: item.revision,
+          data: {
+            ...questions[0],
+            question_text: 'Edited question supported by the same source?',
+          },
+        })
+        .expect(200);
+      const edited = edit.body as {
+        revision: number;
+        provenance: unknown;
+        warnings: string[];
+      };
+      expect(edited.provenance).toEqual(provenance[0]);
+      expect(edited.warnings).toContain('AI_SOURCE_RECHECK_AFTER_EDIT');
+      const approval = await request(http)
+        .post(
+          `/question-generation-batches/${accepted.id}/items/${item.id}/review`,
+        )
+        .send({ revision: edited.revision, decision: 'APPROVE' })
+        .expect(200);
+      const approved = approval.body as { revision: number };
+      await request(http)
+        .post(`/question-generation-batches/${accepted.id}/commit`)
+        .send({ items: [{ id: item.id, revision: approved.revision }] })
+        .expect(200);
+      const saved = await prisma.questionGenerationItem.findUniqueOrThrow({
+        where: { id: item.id },
+      });
+      expect(saved.question_id).not.toBeNull();
+      expect(saved.provenance).toEqual(provenance[0]);
+      await prisma.learningDocument.update({
+        where: { id: documentId },
+        data: { is_deleted: true },
+      });
+      await request(http)
+        .get(`/question-generation-batches/${accepted.id}`)
+        .expect(404);
     });
 
     it('exports batch/review/commit operations and schemas in Swagger', () => {

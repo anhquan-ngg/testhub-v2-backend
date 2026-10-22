@@ -1,6 +1,12 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
 export type GenerationErrorCode =
+  | 'AI_DOCUMENT_SOURCE_INVALID'
+  | 'AI_DOCUMENT_OCR_REQUIRED'
+  | 'AI_DOCUMENT_FAILED'
+  | 'AI_INDEX_FAILED'
+  | 'AI_SOURCE_TIMEOUT'
+  | 'AI_RAG_DISABLED'
   | 'AI_GENERATION_DISABLED'
   | 'AI_REQUEST_INVALID'
   | 'AI_ROLE_FORBIDDEN'
@@ -23,6 +29,7 @@ export class QuestionGenerationException extends HttpException {
   ) {
     const names: Partial<Record<HttpStatus, string>> = {
       [HttpStatus.BAD_REQUEST]: 'Bad Request',
+      [HttpStatus.CONFLICT]: 'Conflict',
       [HttpStatus.FORBIDDEN]: 'Forbidden',
       [HttpStatus.NOT_FOUND]: 'Not Found',
       [HttpStatus.BAD_GATEWAY]: 'Bad Gateway',

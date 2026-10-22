@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { S3Service } from './s3.service';
 import {
   ApiBody,
@@ -9,11 +17,35 @@ import {
 } from '@nestjs/swagger';
 import { ListObjectDto, uploadURLDto, CheckFileDto } from './dto/req.dto';
 import { BucketItemDto, UrlDto, CheckFileResponseDto } from './dto/res.dto';
+import { posix } from 'node:path';
 
 @ApiTags('S3')
 @Controller('s3')
 export class S3Controller {
   constructor(private readonly s3Service: S3Service) {}
+
+  private assertLegacyObject(path: string): void {
+    // Learning document objects are reachable only through owner-scoped APIs.
+    // SDK callers use exact S3 keys; decoding defensively also rejects encoded aliases.
+    let decoded = path ?? '';
+    for (let i = 0; i < 3; i++) {
+      try {
+        const next = decodeURIComponent(decoded);
+        if (next === decoded) break;
+        decoded = next;
+      } catch {
+        break;
+      }
+    }
+    const canonical = posix
+      .normalize('/' + decoded.replaceAll('\\', '/'))
+      .slice(1);
+    if (
+      canonical === 'learning-documents' ||
+      canonical.startsWith('learning-documents/')
+    )
+      throw new ForbiddenException('Use the learning document API');
+  }
 
   @Post('/create-upload-url')
   @ApiOperation({ summary: 'Tạo URL upload tạm thời cho S3' })
@@ -24,6 +56,7 @@ export class S3Controller {
     type: UrlDto,
   })
   createUploadUrl(@Body() uploadURLDto: uploadURLDto): Promise<UrlDto> {
+    this.assertLegacyObject(uploadURLDto.path);
     return this.s3Service.createUploadUrl(uploadURLDto.path);
   }
 
@@ -40,6 +73,7 @@ export class S3Controller {
     type: CheckFileResponseDto,
   })
   checkFile(@Body() checkFileDto: CheckFileDto): Promise<CheckFileResponseDto> {
+    this.assertLegacyObject(checkFileDto.filePath);
     return this.s3Service.checkFileAndGetUploadUrl(checkFileDto.filePath);
   }
 
@@ -68,8 +102,16 @@ export class S3Controller {
     description: 'Danh sách object',
     type: [BucketItemDto],
   })
-  findAll(@Query() listObjectDto: ListObjectDto): Promise<BucketItemDto[]> {
-    return this.s3Service.findAll(listObjectDto);
+  async findAll(
+    @Query() listObjectDto: ListObjectDto,
+  ): Promise<BucketItemDto[]> {
+    this.assertLegacyObject(listObjectDto.path ?? '');
+    const objects = (await this.s3Service.findAll(
+      listObjectDto,
+    )) as BucketItemDto[];
+    return objects.filter(
+      (object) => !(object.name ?? '').startsWith('learning-documents/'),
+    );
   }
 
   @Get('/create-download-url')
@@ -86,6 +128,7 @@ export class S3Controller {
     type: UrlDto,
   })
   presignedGetObject(@Query('objectName') objectName: string): Promise<UrlDto> {
+    this.assertLegacyObject(objectName);
     return this.s3Service.createDownloadUrl(objectName);
   }
 
@@ -103,12 +146,14 @@ export class S3Controller {
     type: UrlDto,
   })
   viewFile(@Query('objectName') objectName: string): Promise<UrlDto> {
+    this.assertLegacyObject(objectName);
     return this.s3Service.getViewUrl(objectName);
   }
 
   @Delete('/remove')
   @ApiOperation({ summary: 'Xóa object khỏi bucket' })
   async remove(@Query('objectName') objectName: string) {
+    this.assertLegacyObject(objectName);
     await this.s3Service.remove(objectName);
     return {
       message: 'Object removed successfully',
