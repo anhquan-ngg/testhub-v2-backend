@@ -185,8 +185,13 @@ export class RagRepository {
   /** Queued rows form the outbox; step number gives each checkpoint a new job id. */
   due() {
     return this.prisma.learningDocumentIndex.findMany({
-      where: { status: 'QUEUED', next_dispatch_at: { lte: new Date() } },
+      where: {
+        status: 'QUEUED',
+        next_dispatch_at: { lte: new Date() },
+        version: { document: this.documents.scope() },
+      },
       select: { id: true, step_count: true },
+      orderBy: { next_dispatch_at: 'asc' },
       take: 25,
     });
   }

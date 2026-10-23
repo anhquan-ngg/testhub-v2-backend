@@ -571,8 +571,13 @@ model QuestionGenerationBatch {
   preparation_stage String?
   sourceVersion     LearningDocumentVersion?     @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
   sourceIndex       LearningDocumentIndex?       @relation(fields: [source_index_id], references: [id], onDelete: NoAction)
+  /// Legacy summary of the first question_configs row; read question_configs.
   question_type    QuestionType                  @default(SINGLE_CHOICE)
+  /// Legacy summary of the first question_configs row; read question_configs.
   question_format  QuestionFormat
+  /// Ordered [{question_type, question_format, count}] rows requested for generation.
+  question_configs Json
+  /// Total of question_configs counts.
   requested_count  Int
   language         String                        @default("vi")
   consented_at     DateTime
@@ -594,6 +599,8 @@ model QuestionGenerationBatch {
   @@unique([created_by, idempotency_key])
   @@index([created_by, created_at(sort: Desc)])
   @@index([status, lease_expires_at])
+  @@index([source_version_id])
+  @@index([source_index_id])
   @@map("question_generation_batches")
 }
 

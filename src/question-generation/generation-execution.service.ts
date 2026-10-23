@@ -15,6 +15,10 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { GenerationBatchRepository } from './generation-batch.repository';
 import { QuestionGenerationService } from './question-generation.service';
+import {
+  matchesQuestionConfigs,
+  questionConfigsSchema,
+} from './question-generation.contract';
 import type { GeneratedQuestion } from './question-generation.contract';
 import { QuestionGenerationException } from './question-generation.errors';
 import { AI_PERSISTENCE_ATTEMPTS } from './question-generation.constants';
@@ -76,10 +80,16 @@ export class GenerationExecutionService {
     try {
       if (batch.creator.status !== UserStatus.ACTIVE)
         throw new Error('inactive actor');
+      const questionConfigs = questionConfigsSchema.parse(
+        batch.question_configs,
+      );
       if (batch.source_mode === 'document') {
         const actor = { id: batch.creator.id, role: batch.creator.role };
         const target = await this.generation.authorizeTarget(actor, batch);
-        const result = await this.documents.generate(batch, target.topic.name);
+        const result = await this.documents.generate(
+          { ...batch, question_configs: questionConfigs },
+          target.topic.name,
+        );
         await this.generation.authorizeTarget(actor, batch);
         questions = result.questions;
         provenance = result.provenance;
@@ -90,9 +100,7 @@ export class GenerationExecutionService {
             topic_id: batch.topic_id,
             chapter_id: batch.chapter_id,
             source: { mode: 'text', text: batch.source_text },
-            question_type: batch.question_type,
-            question_format: batch.question_format,
-            count: batch.requested_count,
+            question_configs: questionConfigs,
             language: batch.language,
             external_processing_consent: Boolean(batch.consented_at),
           },
@@ -145,13 +153,14 @@ export class GenerationExecutionService {
       (candidate) => candidate.id === batch.execution_id,
     );
     const result = storedGenerationResultSchema.safeParse(attempt?.result);
+    const questionConfigs = questionConfigsSchema.safeParse(
+      batch.question_configs,
+    );
     if (
       !result.success ||
+      !questionConfigs.success ||
       (batch.source_mode === 'document' && !result.data.provenance) ||
-      result.data.questions.length !== batch.requested_count ||
-      result.data.questions.some(
-        (question) => question.question_format !== batch.question_format,
-      )
+      !matchesQuestionConfigs(result.data.questions, questionConfigs.data)
     ) {
       await this.repository.fail(
         batchId,

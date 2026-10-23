@@ -320,9 +320,10 @@ The existing `POST /question-generation-batches` accepts the additional source:
     "version_id": "33333333-3333-4333-8333-333333333333",
     "query": "Stack ordering and applications"
   },
-  "question_type": "SINGLE_CHOICE",
-  "question_format": "KNOWLEDGE",
-  "count": 5,
+  "question_configs": [
+    { "question_type": "SINGLE_CHOICE", "question_format": "KNOWLEDGE", "count": 3 },
+    { "question_type": "MULTIPLE_CHOICE", "question_format": "APPLYING", "count": 2 }
+  ],
   "language": "vi",
   "external_processing_consent": true
 }
@@ -352,7 +353,7 @@ command and text-generation.v1 contract are unchanged for API consumers.
 
 `POST /internal/rag/generate` is X-Internal-Token protected and versioned as
 rag-generation.v1, included in the generated RAG OpenAPI. NestJS supplies authorized
-owner/profile/index IDs, query, count and question_format. Python retrieves up to
+owner/profile/index IDs, query and ordered question_configs. Python retrieves up to
 eight chunks using existing budgets, prompts Gemini with those exact chunks,
 validates question structure/count/answers/duplicates and checks each citation ID
 and verbatim quote against retrieved context. It checks the whole scope again after

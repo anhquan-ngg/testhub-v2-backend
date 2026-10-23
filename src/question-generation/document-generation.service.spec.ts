@@ -32,8 +32,7 @@ describe('Document generation authorization and preparation', () => {
     source_index_id: indexId,
     source_profile_id: index.profile_id,
     source_query: 'Stack',
-    requested_count: 1,
-    question_format: fixture.command.question_format,
+    question_configs: fixture.command.question_configs,
   };
   let documents: { source: jest.Mock };
   let indexes: { forVersion: jest.Mock };

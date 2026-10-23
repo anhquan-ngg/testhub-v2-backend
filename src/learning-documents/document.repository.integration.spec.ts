@@ -311,6 +311,13 @@ integration(
             source_version_id: version.id,
             source_index_id: index.id,
             question_format: 'KNOWLEDGE',
+            question_configs: [
+              {
+                question_type: 'SINGLE_CHOICE',
+                question_format: 'KNOWLEDGE',
+                count: 1,
+              },
+            ],
             requested_count: 1,
             consented_at: new Date(),
           },

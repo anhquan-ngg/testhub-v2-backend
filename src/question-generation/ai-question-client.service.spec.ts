@@ -146,9 +146,28 @@ describe('AiQuestionClient real HTTP boundary', () => {
   });
 
   it('checks the response question count against the request', async () => {
+    const [config] = fixture.internal_request.question_configs;
     await expect(
-      client().generate({ ...fixture.internal_request, count: 2 }),
+      client().generate({
+        ...fixture.internal_request,
+        question_configs: [{ ...config, count: 2 }],
+      }),
     ).rejects.toMatchObject({ code: 'AI_OUTPUT_INVALID' });
+  });
+
+  it('checks every question type and level against its requested position', async () => {
+    const [config] = fixture.internal_request.question_configs;
+    for (const change of [
+      { question_type: 'MULTIPLE_CHOICE' as const },
+      { question_format: 'APPLYING' as const },
+    ]) {
+      await expect(
+        client().generate({
+          ...fixture.internal_request,
+          question_configs: [{ ...config, ...change }],
+        }),
+      ).rejects.toMatchObject({ code: 'AI_OUTPUT_INVALID' });
+    }
   });
 
   it('bounds time waiting for response headers', async () => {

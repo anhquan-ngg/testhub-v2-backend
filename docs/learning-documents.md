@@ -8,6 +8,11 @@ preparation, **not RAG generation**: no embedding, chunks, vector DB, retrieval,
 citations or automatic bank inserts are included. Existing text generation and
 its review/commit workflow remain available.
 
+NestJS owns the business tables in PostgreSQL's `public` schema. Python owns the
+`rag` schema in the same PostgreSQL database for chunks, embeddings and retrieval;
+see [RAG setup](rag-indexing.md) for its separate role and SQL migrations. This
+guide remains scoped to ingestion and extraction.
+
 ## Local setup
 
 Do not replace existing environment files. The API and **separate document

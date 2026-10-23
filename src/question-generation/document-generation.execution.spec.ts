@@ -29,7 +29,7 @@ describe('Durable document generation phases', () => {
       source_mode: 'document',
       creator: { id: 'owner', role: 'LECTURER', status: 'ACTIVE' },
       requested_count: 1,
-      question_format: fixture.command.question_format,
+      question_configs: fixture.command.question_configs,
     };
     repo = {
       executionInput: jest
