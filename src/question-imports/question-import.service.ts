@@ -478,8 +478,8 @@ export class QuestionImportService {
             }
           }
 
-          await tx.questionImport.update({
-            where: { id: importId },
+          const finalized = await tx.questionImport.updateMany({
+            where: { id: importId, status: QuestionImportStatus.COMMITTING },
             data: {
               status: QuestionImportStatus.COMPLETED,
               committed_items: prepared.length,
@@ -487,16 +487,30 @@ export class QuestionImportService {
               committed_at: new Date(),
             },
           });
+          if (!finalized.count) {
+            throw new ConflictException('Import commit is no longer active');
+          }
         },
         { maxWait: 10_000, timeout: 120_000 },
       );
       committed = true;
 
-      // Best-effort: the questions are already committed, so a failed delete
-      // only leaves a temp object behind (the expiry cleanup job and bucket
-      // lifecycle catch it) and must not fail the request.
+      // Best-effort: completed imports are not visited by expiry cleanup.
+      // Failed deletes need a separately configured bucket lifecycle/reconciliation.
+      let unusedAssets: Array<{ temp_s3_key: string }> = [];
+      try {
+        unusedAssets = await this.prisma.questionImportAsset.findMany({
+          where: { item: { import_id: importId }, file_id: null },
+          select: { temp_s3_key: true },
+        });
+      } catch {
+        this.logger.warn(
+          `Import ${importId}: could not list unused temp assets`,
+        );
+      }
       const cleanupKeys = [
         questionImport.source_s3_key,
+        ...unusedAssets.map((asset) => asset.temp_s3_key),
         ...prepared.flatMap((entry) =>
           entry.item.assets.map((asset) => asset.temp_s3_key),
         ),
@@ -517,8 +531,8 @@ export class QuestionImportService {
         throw error;
       }
       await Promise.all(copiedKeys.map((key) => this.s3.remove(key)));
-      await this.prisma.questionImport.update({
-        where: { id: importId },
+      await this.prisma.questionImport.updateMany({
+        where: { id: importId, status: QuestionImportStatus.COMMITTING },
         data: {
           status: QuestionImportStatus.REVIEW_REQUIRED,
           error_message: this.errorMessage(error),
@@ -595,14 +609,14 @@ export class QuestionImportService {
         );
       }
       assertOfficeFileSignature(buffer, questionImport.source_type);
-      assertOfficeZipLimits(buffer, {
+      const checkedPackage = await assertOfficeZipLimits(buffer, {
         maxEntries: QUESTION_IMPORT_MAX_ZIP_ENTRIES,
         maxUncompressedBytes: QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES,
       });
       const parsed =
         questionImport.source_type === QuestionImportSourceType.DOCX
-          ? await this.docxParser.parse(buffer)
-          : await this.xlsxParser.parse(buffer);
+          ? await this.docxParser.parse(checkedPackage)
+          : await this.xlsxParser.parse(checkedPackage);
       if (!parsed.length)
         throw new BadRequestException('No questions found in the template');
       if (parsed.length > 1000)

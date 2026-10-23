@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ExamMode, FileType, UserRole } from '@prisma/client';
 import JSZip from 'jszip';
@@ -35,6 +36,8 @@ const PAGE_LOAD_TIMEOUT_MS = 45_000;
 const MATH_READY_TIMEOUT_MS = 15_000;
 /** Chromium instances allowed at once across all print requests. */
 const MAX_CONCURRENT_BROWSERS = 2;
+/** Requests waiting for admission; no question/HTML/PDF payload is prepared yet. */
+const MAX_WAITING_PRINT_REQUESTS = 4;
 /** Tabs rendering at once inside one browser. */
 const MAX_TABS_PER_BROWSER = 3;
 
@@ -42,12 +45,20 @@ const MAX_TABS_PER_BROWSER = 3;
 class Semaphore {
   private readonly waiters: Array<() => void> = [];
 
-  constructor(private available: number) {}
+  constructor(
+    private available: number,
+    private readonly maxWaiters: number,
+  ) {}
 
   async run<T>(task: () => Promise<T>): Promise<T> {
     if (this.available > 0) {
       this.available--;
     } else {
+      if (this.waiters.length >= this.maxWaiters) {
+        throw new ServiceUnavailableException(
+          'Print queue is full; try again later',
+        );
+      }
       await new Promise<void>((resolve) => this.waiters.push(resolve));
     }
     try {
@@ -82,7 +93,10 @@ async function mapWithConcurrency<T, R>(
 }
 
 /** Shared by every request so concurrent prints cannot exhaust the host. */
-const browserSlots = new Semaphore(MAX_CONCURRENT_BROWSERS);
+const browserSlots = new Semaphore(
+  MAX_CONCURRENT_BROWSERS,
+  MAX_WAITING_PRINT_REQUESTS,
+);
 
 /** Generated archive, ready to stream to the client. */
 export type PrintArchive = { buffer: Buffer; fileName: string };
@@ -131,64 +145,66 @@ export class ExamPrintService {
       throw new ForbiddenException('Not allowed to print this exam');
     }
 
-    // selectQuestions throws 400 when the bank cannot satisfy the exam's
-    // distribution, so the lecturer sees the same error an online attempt
-    // would hit.
-    const manualSet =
-      exam.mode === ExamMode.MANUAL
-        ? await this.examRuntime.selectQuestions(exam)
-        : null;
-    const questionSets: ExamQuestionRow[][] = manualSet
-      ? Array.from({ length: variantCount }, () => manualSet)
-      : await Promise.all(
-          Array.from({ length: variantCount }, () =>
-            this.examRuntime.selectQuestions(exam),
-          ),
-        );
+    return browserSlots.run(async () => {
+      // selectQuestions throws 400 when the bank cannot satisfy the exam's
+      // distribution, so the lecturer sees the same error an online attempt
+      // would hit.
+      const manualSet =
+        exam.mode === ExamMode.MANUAL
+          ? await this.examRuntime.selectQuestions(exam)
+          : null;
+      const questionSets: ExamQuestionRow[][] = manualSet
+        ? Array.from({ length: variantCount }, () => manualSet)
+        : await Promise.all(
+            Array.from({ length: variantCount }, () =>
+              this.examRuntime.selectQuestions(exam),
+            ),
+          );
 
-    const sources = await this.hydrateQuestions(questionSets.flat());
-    const codes = generateVariantCodes(variantCount);
-    const variants: ExamVariant[] = codes.map((code, i) =>
-      buildVariant(
-        code,
-        questionSets[i].map((row) => this.requireSource(sources, row.id)),
-      ),
-    );
+      const sources = await this.hydrateQuestions(questionSets.flat());
+      const codes = generateVariantCodes(variantCount);
+      const variants: ExamVariant[] = codes.map((code, i) =>
+        buildVariant(
+          code,
+          questionSets[i].map((row) => this.requireSource(sources, row.id)),
+        ),
+      );
 
-    const info: PrintExamInfo = {
-      title: exam.title,
-      topic_name: exam.topic?.name ?? '',
-      lecturer_name: exam.lecturer?.full_name ?? '',
-      school: exam.lecturer?.school ?? null,
-      duration: exam.duration,
-    };
+      const info: PrintExamInfo = {
+        title: exam.title,
+        topic_name: exam.topic?.name ?? '',
+        lecturer_name: exam.lecturer?.full_name ?? '',
+        school: exam.lecturer?.school ?? null,
+        duration: exam.duration,
+      };
 
-    const pdfs = await this.renderPdfs([
-      ...variants.map((variant) => ({
-        html: renderVariantHtml(info, variant),
-        footerLabel: `Mã đề ${variant.code}`,
-      })),
-      { html: renderAnswerKeyHtml(info, variants), footerLabel: 'Đáp án' },
-    ]);
+      const pdfs = await this.renderPdfs([
+        ...variants.map((variant) => ({
+          html: renderVariantHtml(info, variant),
+          footerLabel: `Mã đề ${variant.code}`,
+        })),
+        { html: renderAnswerKeyHtml(info, variants), footerLabel: 'Đáp án' },
+      ]);
 
-    const zip = new JSZip();
-    variants.forEach((variant, i) => {
-      zip.file(`Ma_de_${variant.code}.pdf`, pdfs[i]);
+      const zip = new JSZip();
+      variants.forEach((variant, i) => {
+        zip.file(`Ma_de_${variant.code}.pdf`, pdfs[i]);
+      });
+      zip.file('Dap_an.pdf', pdfs[variants.length]);
+      const buffer = await zip.generateAsync({
+        type: 'nodebuffer',
+        compression: 'DEFLATE',
+      });
+
+      this.logger.log(
+        `Printed exam ${exam.id}: ${variantCount} variants (${codes.join(', ')}) for user ${user.id}`,
+      );
+
+      return {
+        buffer,
+        fileName: `De_thi_${toAsciiSlug(exam.title)}_${variantCount}_ma_de.zip`,
+      };
     });
-    zip.file('Dap_an.pdf', pdfs[variants.length]);
-    const buffer = await zip.generateAsync({
-      type: 'nodebuffer',
-      compression: 'DEFLATE',
-    });
-
-    this.logger.log(
-      `Printed exam ${exam.id}: ${variantCount} variants (${codes.join(', ')}) for user ${user.id}`,
-    );
-
-    return {
-      buffer,
-      fileName: `De_thi_${toAsciiSlug(exam.title)}_${variantCount}_ma_de.zip`,
-    };
   }
 
   /**
@@ -288,21 +304,17 @@ export class ExamPrintService {
    * MAX_TABS_PER_BROWSER tabs at once. Output order matches `documents`.
    */
   private async renderPdfs(documents: PdfDocument[]): Promise<Buffer[]> {
-    return browserSlots.run(async () => {
-      const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
-      try {
-        return await mapWithConcurrency(
-          documents,
-          MAX_TABS_PER_BROWSER,
-          (doc) => this.renderPdf(browser, doc),
-        );
-      } finally {
-        await browser.close();
-      }
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
+    try {
+      return await mapWithConcurrency(documents, MAX_TABS_PER_BROWSER, (doc) =>
+        this.renderPdf(browser, doc),
+      );
+    } finally {
+      await browser.close();
+    }
   }
 
   private async renderPdf(

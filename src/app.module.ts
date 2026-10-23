@@ -19,6 +19,8 @@ import { SubmissionModule } from './submission/submission.module';
 import { ExamRuntimeModule } from './exam-runtime/exam-runtime.module';
 import { QuestionImportModule } from './question-imports/question-import.module';
 import { ExamPrintModule } from './exam-print/exam-print.module';
+import { QuestionGenerationModule } from './question-generation/question-generation.module';
+import { DocumentModule } from './learning-documents/document.module';
 
 @Module({
   imports: [
@@ -41,6 +43,8 @@ import { ExamPrintModule } from './exam-print/exam-print.module';
     FilesModule,
     QuestionImportModule,
     ExamPrintModule,
+    QuestionGenerationModule,
+    DocumentModule,
   ],
   controllers: [AppController],
   providers: [AppService],

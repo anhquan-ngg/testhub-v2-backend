@@ -10,7 +10,7 @@ export const QUESTION_IMPORT_TTL_HOURS = 24;
  * timeout plus the time spent copying images to permanent storage.
  */
 export const QUESTION_IMPORT_COMMIT_STALE_MS = 15 * 60 * 1000;
-/** Zip-bomb guards for uploaded .docx/.xlsx packages (central directory). */
+/** Zip-bomb guards for entry count and aggregate actual inflated bytes. */
 export const QUESTION_IMPORT_MAX_ZIP_ENTRIES = 10_000;
 export const QUESTION_IMPORT_MAX_UNCOMPRESSED_BYTES = 250 * 1024 * 1024;
 

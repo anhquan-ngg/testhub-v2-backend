@@ -13,14 +13,17 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { UrlDto } from './dto/res.dto';
 import { ListObjectDto } from './dto/req.dto';
 import { ConfigService } from '@nestjs/config';
+import { Readable } from 'node:stream';
 
 @Injectable()
 export class S3Service implements OnModuleInit {
   private readonly s3Client: S3Client;
   private readonly bucketName: string;
+  private readonly storageEndpoint: URL;
 
   constructor(private readonly configService: ConfigService) {
-    const s3Region = this.configService.get('AWS_REGION') || 'ap-southeast-1';
+    const s3Region =
+      this.configService.get<string>('AWS_REGION') || 'ap-southeast-1';
     const s3AccessKey = this.configService.get('AWS_ACCESS_KEY_ID');
     const s3SecretKey = this.configService.get('AWS_SECRET_ACCESS_KEY');
 
@@ -33,6 +36,14 @@ export class S3Service implements OnModuleInit {
     });
 
     this.bucketName = this.configService.getOrThrow('AWS_S3_BUCKET_NAME');
+    // Resolve with the same SDK rules as presigning (including dotted buckets).
+    this.storageEndpoint = this.s3Client.config.endpointProvider({
+      Bucket: this.bucketName,
+      Region: s3Region,
+      UseFIPS: false,
+      UseDualStack: false,
+      ForcePathStyle: false,
+    }).url;
   }
 
   async onModuleInit() {
@@ -89,6 +100,67 @@ export class S3Service implements OnModuleInit {
     );
   }
 
+  /** Bound document writes so expired executions cannot occupy worker slots indefinitely. */
+  async putBoundedObject(
+    objectName: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      await this.s3Client.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: objectName,
+          Body: body,
+          ContentType: contentType,
+        }),
+        { abortSignal: controller.signal },
+      );
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
+  /** Bound actual streamed bytes and total download time, independent of HEAD metadata. */
+  async getBoundedObject(
+    objectName: string,
+    maxBytes: number,
+  ): Promise<Buffer> {
+    const controller = new AbortController();
+    let body: Readable | undefined;
+    const timer = setTimeout(() => {
+      controller.abort();
+      body?.destroy(new Error('Storage download deadline exceeded'));
+    }, 30_000);
+    try {
+      const response = await this.s3Client.send(
+        new GetObjectCommand({ Bucket: this.bucketName, Key: objectName }),
+        { abortSignal: controller.signal },
+      );
+      body = response.Body as Readable | undefined;
+      if (!body || (response.ContentLength ?? 0) > maxBytes)
+        throw new Error('Storage object missing or exceeds limit');
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of body) {
+        const bytes = Buffer.from(chunk as Uint8Array);
+        size += bytes.length;
+        if (size > maxBytes) throw new Error('Storage object exceeds limit');
+        chunks.push(bytes);
+      }
+      if (controller.signal.aborted)
+        throw new Error('Storage download deadline exceeded');
+      return Buffer.concat(chunks);
+    } finally {
+      clearTimeout(timer);
+      body?.destroy();
+      controller.abort();
+    }
+  }
+
   async copyObject(sourceName: string, destinationName: string) {
     const copySource = `${this.bucketName}/${sourceName}`
       .split('/')
@@ -105,7 +177,7 @@ export class S3Service implements OnModuleInit {
 
   /** Hostname of the bucket, as used by storage URLs and presigned URLs. */
   getStorageHost(): string {
-    return `${this.bucketName}.s3.${this.configService.get('AWS_REGION') || 'ap-southeast-1'}.amazonaws.com`;
+    return this.storageEndpoint.hostname;
   }
 
   createStorageUrl(objectName: string): string {
@@ -114,7 +186,7 @@ export class S3Service implements OnModuleInit {
       .map(encodeURIComponent)
       .join('/');
 
-    return `https://${this.getStorageHost()}/${encodedObjectName}`;
+    return `${this.storageEndpoint.href.replace(/\/$/, '')}/${encodedObjectName}`;
   }
 
   async findAll({ path, limit, startAfter }: ListObjectDto) {

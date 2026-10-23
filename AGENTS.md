@@ -1,5 +1,59 @@
 # AGENTS.md — testhub-v2-backend
 
+## File-based RAG question generation (2026-10-23)
+
+- The batch API also accepts source.mode=document with immutable version_id and
+  optional query, scoped to the lecturer and selected topic/chapter. The text API
+  contract remains compatible. Read docs/rag-indexing.md section 4 for setup/demo.
+- WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
+  attempt. The AI worker pins one index/profile and promotes only READY sources.
+  The separate document worker still owns extraction/index checkpoints. Preparation
+  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+- Migration 20261023090000_add_document_question_generation adds source FKs and
+  nullable item provenance. It was generated offline, not applied to user DB.
+- DocumentGenerationService authorizes sources before/after internal generation.
+  RagAccessModule shares authorization/index clients without S3 configuration.
+  POST /internal/rag/generate returns rag-generation.v1, with checked evidence.
+- Store provenance separately from editable bank-shaped data. Preserve evidence on
+  edit and flag AI_SOURCE_RECHECK_AFTER_EDIT; a new revision still needs approval.
+  Recovery must retain provenance without reissuing generation. Only the existing
+  approved commit writes Question. Original evidence is not proof of correctness.
+
+## Current RAG implementation (2026-10-21)
+
+- LearningDocumentIndex is a separate business model. Additive migration
+  `20261021100000_add_document_indexes` was created offline; do not auto-apply.
+- RagController/RagService own lecturer index start/retry/retrieve. Reject an entire
+  foreign/revoked/not-READY version set before paid calls; recheck after I/O.
+  Browser cannot choose owner/profile/index IDs. No bank write occurs in retrieval.
+- `start:document-worker` also owns the separate ai-document-indexing queue.
+  One bounded prepare/embed checkpoint per delivery, DB outbox, execution/lease
+  fences and durable progress. SDK/HTTP retry nesting is prohibited. Preserve the
+  Python invocation budget across explicit retries; exactly-once billing is not promised.
+- Revoke business indexes in the same document transaction, then dispatch technical
+  tombstones even for inaccessible documents. Do not promise physical deletion.
+- AI_RAG_ENABLED defaults false and depends on existing AI integration config.
+  Google key and dedicated rag database credentials stay only in Python.
+- Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
+  limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
+
+## Learning document ingestion (2026-10-21)
+
+- `learning-documents/` owns separate LearningDocument/LearningDocumentVersion
+  tables. FileType and import staging are not reused. Migration:
+  `20261021090000_add_learning_documents`; do not apply to the user's DB automatically.
+- `/learning-documents` is cookie/JWT + lecturer guarded and owner scoped.
+  Complete freezes actual checked bytes before conditional UPLOADING→QUEUED;
+  never process a mutable upload key. Require explicit consent and notes opt-in.
+- `npm run start:document-worker` owns separate `ai-document-processing` jobs.
+  Queued versions form a durable outbox. Fence claims/results by execution UUID,
+  lease and current ownership. No paid calls occur in extraction.
+- Only Python extracts PDF/PPTX; send bounded bytes, never an arbitrary URL.
+  Preserve source hash and PAGE/SLIDE/NOTES. EXTRACTED/OCR_REQUIRED are not a RAG index.
+- Block `learning-documents/` keys in legacy `/s3/*` routes and root listings;
+  otherwise those endpoints bypass document ownership. Do not log source bodies.
+- See `docs/learning-documents.md` for setup, limits, retention gaps and opt-in tests.
+
 Hướng dẫn chung cho mọi AI agent (Claude Code, Codex, Cursor, Copilot…) làm việc trong repo này. Nội dung dựa trên code và cấu hình thực tế tại thời điểm viết; khi thấy tài liệu lệch với code, tin code và cập nhật lại file này.
 
 ## 0. Trước khi làm việc
@@ -46,6 +100,7 @@ src/
   exam-runtime/           # trạng thái phòng thi, ping, vi phạm, giám sát, SSE, BullMQ processor, gateway /exam-runtime
   notification/           # gateway Socket.IO /notifications + REST /notification/*
   question-imports/       # import câu hỏi từ .docx/.xlsx (parsers/, queue, processor)
+  question-generation/    # batch/staging, worker FastAPI, review theo revision và approved commit
   exam-print/             # in đề thi bằng puppeteer
   middleware/             # crud.middleware.ts (hiện chỉ gọi next())
 prisma/
@@ -138,6 +193,10 @@ Không có `.env.example` (README nhắc tới nhưng file không tồn tại). 
 
 `PORT`, `NODE_ENV`, `FRONTEND_URL`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES`, `JWT_REFRESH_EXPIRES`, `JWT_SECRET`, `JWT_EXPIRATION` (cấu hình mặc định của `JwtModule` trong `src/auth/auth.module.ts`), `ENCRYPTION_SECRET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME` (bắt buộc, `getOrThrow`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_CALLBACK_URL`.
 
+Luồng thử nghiệm Gemini trực tiếp đã gỡ; Gemini thuộc `../testhub-ai-service`. Module generation có batch/staging, worker FastAPI, review/revision và commit đã duyệt. Xem `docs/ai-question-generation.md` và `.env.ai.example`.
+
+Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
+
 `docker-compose.yaml` còn dùng `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`. Khi thêm biến mới, ghi tên biến vào mục này (không ghi giá trị).
 
 ## 7. Kiểm tra cần chạy theo phạm vi thay đổi
@@ -171,3 +230,33 @@ Ghi kết quả thực tế (lệnh, pass/fail, số lỗi) vào `CONTINUITY.md`
 - `prisma/migrations/*` đã tồn tại — không chỉnh sửa; tạo migration mới thay vì sửa cũ.
 - `package-lock.json` — chỉ thay đổi thông qua `npm install`, không sửa tay.
 - `src/question-imports/parsers/fixtures/*.docx|*.xlsx` — fixture test nhị phân, không sửa trừ khi cập nhật test tương ứng.
+
+## 10. AI batches and dedicated worker (2026-10-19)
+
+- `QuestionGenerationModule` serves cookie/JWT + lecturer-only batch POST (202),
+  status GET and paginated item GET under `/question-generation-batches`.
+- AI business persistence is separate: `QuestionGenerationBatch`,
+  `QuestionGenerationItem`, `QuestionGenerationAttempt`, `QuestionGenerationOutbox`.
+  Never reuse import tables. Only an explicit approved commit transaction may
+  insert generated questions into `Question`.
+- `npm run start:ai-worker` runs the built `dist/question-generation.worker.js` in
+  its own Nest application context. API and worker share the existing DB/Redis/AI
+  settings; the API does not register the AI processor. Apply the additive AI
+  migration before enabling/starting the feature on a target database.
+- Persist batch + outbox in one transaction. Require owner-scoped Idempotency-Key
+  and a canonical request hash. Queue payloads contain only batch UUIDs.
+- One claimed batch permits one FastAPI invocation. Python owns provider retries.
+  Redis delivery and DB persistence retries must never reissue a paid AI call.
+  Reconcile saved results; mark ambiguous interrupted attempts UNKNOWN.
+- Only conditional state/execution-fenced writes may finish/fail a batch. Recheck
+  active lecturer and owned topic/chapter before disclosure and draft persistence.
+- Keep original/current draft JSON and revision separate. VALID is not approval.
+  Edit/review requests require exact revision; edits invalidate approval. Commit
+  accepts only APPROVED revisions, locks the batch first and stores bank rows,
+  item mappings and QuestionGenerationReview audit together. Commit preserves
+  approved revision so retries return the same bank mapping. COMPLETED batches
+  are closed to editing; deleted bank mappings must never be recreated by retry.
+  Retention/cost quotas remain later work.
+- Read `docs/ai-question-generation.md` for migration/demo commands and opt-in
+  `TESTHUB_AI_DATABASE_URL` / `TESTHUB_AI_REDIS_URL` tests. Use disposable loopback
+  services, private test schemas/prefixes, no shared DB reset/Redis flush.

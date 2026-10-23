@@ -44,6 +44,7 @@ async function bootstrap() {
     .setDescription('The API documentation')
     .setVersion('1.0')
     .addBearerAuth()
+    .addCookieAuth('access_token')
     .build();
 
   // Tạo tài liệu Swagger

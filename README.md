@@ -1,5 +1,64 @@
 # TestHub V2 - Backend System
 
+## File-based RAG question generation (2026-10-23)
+
+- The batch API also accepts source.mode=document with immutable version_id and
+  optional query, scoped to the lecturer and selected topic/chapter. The text API
+  contract remains compatible. Read docs/rag-indexing.md section 4 for setup/demo.
+- WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
+  attempt. The AI worker pins one index/profile and promotes only READY sources.
+  The separate document worker still owns extraction/index checkpoints. Preparation
+  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+- Migration 20261023090000_add_document_question_generation adds source FKs and
+  nullable item provenance. It was generated offline, not applied to user DB.
+- DocumentGenerationService authorizes sources before/after internal generation.
+  RagAccessModule shares authorization/index clients without S3 configuration.
+  POST /internal/rag/generate returns rag-generation.v1, with checked evidence.
+- Store provenance separately from editable bank-shaped data. Preserve evidence on
+  edit and flag AI_SOURCE_RECHECK_AFTER_EDIT; a new revision still needs approval.
+  Recovery must retain provenance without reissuing generation. Only the existing
+  approved commit writes Question. Original evidence is not proof of correctness.
+
+## Current RAG implementation (2026-10-21)
+
+- LearningDocumentIndex is a separate business model. Additive migration
+  `20261021100000_add_document_indexes` was created offline; do not auto-apply.
+- RagController/RagService own lecturer index start/retry/retrieve. Reject an entire
+  foreign/revoked/not-READY version set before paid calls; recheck after I/O.
+  Browser cannot choose owner/profile/index IDs. No bank write occurs in retrieval.
+- `start:document-worker` also owns the separate ai-document-indexing queue.
+  One bounded prepare/embed checkpoint per delivery, DB outbox, execution/lease
+  fences and durable progress. SDK/HTTP retry nesting is prohibited. Preserve the
+  Python invocation budget across explicit retries; exactly-once billing is not promised.
+- Revoke business indexes in the same document transaction, then dispatch technical
+  tombstones even for inaccessible documents. Do not promise physical deletion.
+- AI_RAG_ENABLED defaults false and depends on existing AI integration config.
+  Google key and dedicated rag database credentials stay only in Python.
+- Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
+  limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
+
+## Tài liệu học tập — PDF/PPTX và trích xuất nền
+
+Module `src/learning-documents/` có metadata/phiên bản riêng, presigned upload,
+xác nhận bytes nguồn, polling, xem text theo trang/slide và thu hồi quyền truy cập.
+Cần migration `20261021090000_add_learning_documents`, AI service cập nhật và
+tiến trình riêng `npm run start:document-worker` sau khi build.
+Xem [hướng dẫn chạy, API và demo](docs/learning-documents.md).
+Embedding, retrieval và sinh câu hỏi từ file đều đã có; xem [hướng dẫn RAG](docs/rag-indexing.md).
+
+## AI question generation — batches and background worker
+
+Module `src/question-generation/` kiểm tra quyền sở hữu môn/chương, contract
+`text-generation.v1` và gọi FastAPI qua HTTP nội bộ. Cấu hình theo
+[hướng dẫn tích hợp](docs/ai-question-generation.md) và `.env.ai.example`.
+Đã có API tạo lô `POST /question-generation-batches` trả `202`, API đọc trạng thái/
+bản nháp, các bảng AI staging/audit riêng và worker BullMQ chạy độc lập. Có API
+sửa/duyệt theo revision và commit câu đã duyệt vào ngân hàng bằng transaction,
+chống lưu trùng khi gửi lại. Áp dụng hai migration AI local theo hướng dẫn,
+chạy API, FastAPI, Redis, sau đó `npm run build` và `npm run start:ai-worker` ở terminal
+riêng. Frontend: mở ngân hàng câu hỏi → **Sinh câu hỏi bằng AI**, hoặc
+`/{locale}/lecturer/questions/generate`, tạo lô, sửa/duyệt, chọn câu và xác nhận lưu.
+
 <p align="center">
   <a href="https://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

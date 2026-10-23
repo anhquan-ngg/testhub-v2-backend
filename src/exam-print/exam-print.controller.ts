@@ -55,6 +55,10 @@ export class ExamPrintController {
   })
   @ApiResponse({ status: 403, description: 'Not the owner of this exam.' })
   @ApiResponse({ status: 404, description: 'Exam not found.' })
+  @ApiResponse({
+    status: 503,
+    description: 'Print queue is full; retry later.',
+  })
   async print(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PrintExamDto,
