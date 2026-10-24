@@ -1,6 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { QuestionFormat } from '@prisma/client';
 import { DocumentRepository } from '../learning-documents/document.repository';
 import { RagRepository } from '../learning-documents/rag.repository';
 import { RagService } from '../learning-documents/rag.service';
@@ -10,7 +9,10 @@ import {
   QuestionGenerationException,
   GenerationErrorCode,
 } from './question-generation.errors';
-import { GenerationCommand } from './question-generation.contract';
+import {
+  GenerationCommand,
+  QuestionConfig,
+} from './question-generation.contract';
 import { QuestionProvenance } from './grounded-generation.contract';
 
 type SourceInput = {
@@ -100,10 +102,7 @@ export class DocumentGenerationService {
   }
   /** Recheck all source/index identities around the only paid generation invocation. */
   async generate(
-    input: SourceInput & {
-      question_format: QuestionFormat;
-      requested_count: number;
-    },
+    input: SourceInput & { question_configs: QuestionConfig[] },
     topic: string,
   ) {
     this.enabled();
@@ -134,8 +133,7 @@ export class DocumentGenerationService {
         index_ids: [index.id],
         query,
         top_k: 8,
-        count: input.requested_count,
-        question_format: input.question_format,
+        question_configs: input.question_configs,
       });
     } catch (error) {
       if (error instanceof DocumentProcessingError)

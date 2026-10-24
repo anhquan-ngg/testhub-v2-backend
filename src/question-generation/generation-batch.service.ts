@@ -68,9 +68,7 @@ export class GenerationBatchService {
       topic_id: command.topic_id,
       chapter_id: command.chapter_id,
       source: command.source,
-      question_type: command.question_type,
-      question_format: command.question_format,
-      count: command.count,
+      question_configs: command.question_configs,
       language: command.language,
       external_processing_consent: command.external_processing_consent,
     };

@@ -3,6 +3,9 @@ import { readContractFixture } from './fixtures/contract-fixture';
 import {
   aiGenerateRequestSchema,
   aiGenerateResponseSchema,
+  generatedQuestionSchema,
+  generationCommandSchema,
+  matchesQuestionConfigs,
   textGenerationCommandSchema,
   toQuestionBankDraft,
 } from './question-generation.contract';
@@ -43,6 +46,138 @@ describe('text-generation.v1 contract', () => {
         ...change,
       }).success,
     ).toBe(false);
+  });
+
+  it('normalizes the legacy single-row command into question_configs', () => {
+    const { question_configs: configs, ...rest } = fixture.command;
+    const [config] = configs;
+    expect(
+      generationCommandSchema.parse({
+        ...rest,
+        question_type: config.question_type,
+        question_format: config.question_format,
+        count: config.count,
+      }),
+    ).toEqual(fixture.command);
+  });
+
+  it('accepts ordered mixed rows up to 20 questions', () => {
+    const configs = [
+      {
+        question_type: 'SINGLE_CHOICE',
+        question_format: 'KNOWLEDGE',
+        count: 12,
+      },
+      {
+        question_type: 'MULTIPLE_CHOICE',
+        question_format: 'APPLYING',
+        count: 8,
+      },
+    ];
+    expect(
+      generationCommandSchema.parse({
+        ...fixture.command,
+        question_configs: configs,
+      }).question_configs,
+    ).toEqual(configs);
+  });
+
+  it.each([
+    { question_configs: [] },
+    {
+      question_configs: [
+        { question_type: 'ESSAY', question_format: 'KNOWLEDGE', count: 1 },
+      ],
+    },
+    {
+      question_configs: [
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'KNOWLEDGE',
+          count: 11,
+        },
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'KNOWLEDGE',
+          count: 10,
+        },
+      ],
+    },
+    {
+      question_configs: Array.from({ length: 11 }, () => ({
+        question_type: 'SINGLE_CHOICE',
+        question_format: 'KNOWLEDGE',
+        count: 1,
+      })),
+    },
+    {
+      question_configs: [
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'KNOWLEDGE',
+          count: 1,
+          extra: true,
+        },
+      ],
+    },
+    { question_configs: undefined },
+    { question_format: 'KNOWLEDGE' },
+    { question_type: 'SINGLE_CHOICE', question_format: 'KNOWLEDGE', count: 1 },
+  ])('rejects ambiguous or unsupported question configs: %j', (change) => {
+    expect(
+      generationCommandSchema.safeParse({ ...fixture.command, ...change })
+        .success,
+    ).toBe(false);
+  });
+
+  it('applies the correct-option rule of each question type', () => {
+    const question = fixture.internal_response.questions[0];
+    const multiple = (correct: number) => ({
+      ...question,
+      question_type: 'MULTIPLE_CHOICE',
+      options: question.options.map((option, index) => ({
+        ...option,
+        isCorrect: index < correct,
+      })),
+    });
+    expect(generatedQuestionSchema.safeParse(multiple(2)).success).toBe(true);
+    expect(generatedQuestionSchema.safeParse(multiple(3)).success).toBe(true);
+    for (const correct of [0, 1, 4])
+      expect(generatedQuestionSchema.safeParse(multiple(correct)).success).toBe(
+        false,
+      );
+    expect(
+      generatedQuestionSchema.safeParse({ ...question, question_type: 'ESSAY' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('matches drafts to configs by position', () => {
+    const configs = [
+      {
+        question_type: 'SINGLE_CHOICE',
+        question_format: 'KNOWLEDGE',
+        count: 1,
+      },
+      {
+        question_type: 'MULTIPLE_CHOICE',
+        question_format: 'APPLYING',
+        count: 1,
+      },
+    ] as const;
+    const single = {
+      question_type: 'SINGLE_CHOICE',
+      question_format: 'KNOWLEDGE',
+    } as const;
+    const multiple = {
+      question_type: 'MULTIPLE_CHOICE',
+      question_format: 'APPLYING',
+    } as const;
+    expect(matchesQuestionConfigs([single, multiple], [...configs])).toBe(true);
+    expect(matchesQuestionConfigs([multiple, single], [...configs])).toBe(
+      false,
+    );
+    expect(matchesQuestionConfigs([single], [...configs])).toBe(false);
   });
 
   it('normalizes blank topics and counts Unicode code points like Python', () => {

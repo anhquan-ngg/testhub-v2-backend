@@ -1,5 +1,18 @@
 # AGENTS.md — testhub-v2-backend
 
+## Question configs for AI generation (2026-10-23)
+
+- Batch commands accept ordered question_configs (1-10 rows, total <=20,
+  SINGLE_CHOICE|MULTIPLE_CHOICE x QuestionFormat). The legacy single-row
+  question_type/question_format/count form is normalized to one row; both forms
+  together are rejected. Shared zod contract: question-generation.contract.ts.
+- Migration 20261023120000_add_generation_question_configs adds and backfills
+  question_configs (JSONB, NOT NULL). Generated offline, not applied to user DB.
+  Legacy columns keep the first row; requested_count is the total.
+- Worker/recovery/clients validate drafts with matchesQuestionConfigs (count plus
+  type/level per position). MULTIPLE_CHOICE drafts need 2-3 correct of 4, also on
+  edit; approved commits write the draft's question_type to Question.
+
 ## File-based RAG question generation (2026-10-23)
 
 - The batch API also accepts source.mode=document with immutable version_id and

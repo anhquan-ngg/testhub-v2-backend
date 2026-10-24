@@ -1,5 +1,42 @@
 # CONTINUITY.md — testhub-v2-backend
 
+## User list ordering (2026-10-23)
+
+- GET /users accepts optional sortOrder=asc|desc (default desc), validated and
+  documented in QueryUserDto. UsersRepository orders by created_at then id using
+  that direction before applying the existing page/limit.
+- Validation: three DTO/repository regression tests and full Jest passed
+  (236 passed, 42 opt-in integration tests skipped). TypeScript and scoped ESLint
+  passed. No live database or authenticated HTTP verification was performed.
+
+## RAG outbox and migration review (2026-10-23)
+
+- RagRepository.due now restricts queued indexes to DocumentRepository.scope()
+  (active lecturer/document/topic/chapter) and orders by next_dispatch_at before
+  taking 25 rows. Revocation delivery remains independent of document access.
+- Added source_version_id/source_index_id lookup indexes to QuestionGenerationBatch
+  and the document-generation migration as requested; existing source FKs retain
+  NO ACTION. No migration was applied to a runtime database.
+- AI setup and P2021/P2022 guidance now list all six prerequisite migrations,
+  including question_configs, and require API/worker DB/schema consistency.
+  Extraction docs clarify NestJS business-table and Python rag-schema ownership.
+- Validation: full Jest 233 passed / 42 opt-in tests skipped; TypeScript and
+  Prisma generate passed. Offline generated SQL matches both new indexes and
+  existing source FKs; all six documented migration paths exist. Scoped ESLint,
+  formatting and diff checks passed after a test-only formatting correction.
+  No live PostgreSQL/Redis/S3/provider verification was performed.
+
+## Question configs for AI generation (2026-10-23)
+
+- Contract, DTO, repository, worker/recovery, AI/RAG clients and response DTOs use
+  question_configs; legacy single-row commands are still accepted.
+- New migration 20261023120000_add_generation_question_configs was written by hand
+  (add, backfill, set NOT NULL) and **not applied**. Run `npx prisma migrate dev`
+  on a local DB before using the feature.
+- Validation: `npx prisma generate`, typecheck clean; full `npx jest`
+  **232 passed, 42 skipped** (opt-in DB/Redis/FastAPI suites); eslint clean on
+  changed files. Opt-in integration suites were not run.
+
 ## Review corrections (2026-10-23)
 
 - RagDispatcher observes queue.client once without blocking reconciliation or shutdown on initial Redis readiness; rejected initialization is handled. GenerationDispatcher already used this pattern and required no change.

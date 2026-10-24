@@ -8,6 +8,7 @@ import type { AiServiceOptions } from './ai-service.config';
 import {
   aiGenerateRequestSchema,
   aiGenerateResponseSchema,
+  matchesQuestionConfigs,
 } from './question-generation.contract';
 import type {
   AiGenerateRequest,
@@ -82,10 +83,9 @@ export class AiQuestionClient {
       const result = aiGenerateResponseSchema.safeParse(value);
       if (
         !result.success ||
-        result.data.questions.length !== request.data.count ||
-        result.data.questions.some(
-          (question) =>
-            question.question_format !== request.data.question_format,
+        !matchesQuestionConfigs(
+          result.data.questions,
+          request.data.question_configs,
         )
       ) {
         throw this.invalidOutput();

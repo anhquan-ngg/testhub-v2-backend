@@ -48,9 +48,10 @@ This policy does not repair unrelated existing question CRUD authorization.
     "mode": "text",
     "text": "Tìm kiếm nhị phân hoạt động trên mảng đã sắp xếp và có độ phức tạp O(log n)."
   },
-  "question_type": "SINGLE_CHOICE",
-  "question_format": "KNOWLEDGE",
-  "count": 1,
+  "question_configs": [
+    { "question_type": "SINGLE_CHOICE", "question_format": "KNOWLEDGE", "count": 3 },
+    { "question_type": "MULTIPLE_CHOICE", "question_format": "APPLYING", "count": 2 }
+  ],
   "language": "vi",
   "external_processing_consent": true
 }
@@ -59,11 +60,18 @@ This policy does not repair unrelated existing question CRUD authorization.
 This is the body of the implemented `POST /question-generation-batches` route.
 The frontend mirror is `../testhub-v2/src/types/question-generation.ts`.
 Runtime validation is strict: no numeric/string/boolean coercion or extra fields;
-UUID target IDs; trimmed text of 20–20,000 Unicode code points; count 1–20;
-`KNOWLEDGE | UNDERSTANDING | APPLYING | ADVANCED`; Vietnamese single-choice only.
+UUID target IDs; trimmed text of 20–20,000 Unicode code points; 1–10
+`question_configs` rows of `SINGLE_CHOICE | MULTIPLE_CHOICE` ×
+`KNOWLEDGE | UNDERSTANDING | APPLYING | ADVANCED` × count, totalling 1–20
+questions; Vietnamese only. Questions are generated in row order. The legacy
+single-row form `question_type: SINGLE_CHOICE, question_format, count` is still
+accepted and normalized to one row; sending both forms is rejected. The batch
+stores `question_configs` (migration `20261023120000_add_generation_question_configs`
+backfills old rows); `question_type`/`question_format` columns keep the first row
+for older readers and `requested_count` is the total.
 Document mode is implemented with an immutable version_id and optional query;
 see [file generation](rag-indexing.md#4-generate-questions-directly-from-an-attached-file-2026-10-23).
-Learning objectives and other question types remain unsupported. Explicit consent
+Learning objectives and ESSAY generation remain unsupported. Explicit consent
 is required before source content or queries are disclosed.
 The batch stores the source snapshot and a `consented_at` timestamp.
 
@@ -84,24 +92,30 @@ type mirrors these persisted states. Cancellation/expiry are not implemented.
 
 The adapter resolves `topic` from DB; clients cannot supply a display label or
 arbitrary internal URL. Empty topic names become null; names over 200 code points
-are truncated for the provider prompt. Only these four fields leave NestJS:
+are truncated for the provider prompt. Only these three fields leave NestJS:
 
 ```json
 {
   "text": "Tìm kiếm nhị phân hoạt động trên mảng đã sắp xếp và có độ phức tạp O(log n).",
   "topic": "Cấu trúc dữ liệu",
-  "question_format": "KNOWLEDGE",
-  "count": 1
+  "question_configs": [
+    { "question_type": "SINGLE_CHOICE", "question_format": "KNOWLEDGE", "count": 1 }
+  ]
 }
 ```
+
+Python still accepts the older `question_format` + `count` request (single choice)
+for compatibility; NestJS always sends `question_configs`.
 
 `POST /internal/generate` uses `X-Internal-Token`. It receives no user cookie,
 Gemini key, topic/chapter IDs, consent flag, or batch state. The application
 service returns `{topic_id, chapter_id, questions}`. Every question contains
-`question_text`, four distinct `{text,isCorrect}` choices, exactly one correct
-choice, `question_type: SINGLE_CHOICE`, the requested `question_format`, and
-`correct_answer: null`. NestJS independently checks unknown fields, lengths,
-exact count, requested level, duplicate texts and choices. Duplicate comparison
+`question_text`, four distinct `{text,isCorrect}` choices, the requested
+`question_type`/`question_format` of its position, and `correct_answer: null`.
+`SINGLE_CHOICE` has exactly one correct choice; `MULTIPLE_CHOICE` has two or three
+(never all four). The same rule applies to lecturer edits. NestJS independently
+checks unknown fields, lengths, exact count, type/level per position, duplicate
+texts and choices. Duplicate comparison
 uses trimmed lower-case text in NestJS; Python additionally uses Unicode
 `casefold`. This is structural validation, not proof of educational correctness.
 
@@ -266,14 +280,29 @@ sequenceDiagram
 
 ## Run and demo locally
 
-1. Review both additive migrations:
-   `prisma/migrations/20261019090000_add_ai_generation_staging/migration.sql` and
-   `prisma/migrations/20261019100000_add_ai_review_commit/migration.sql`.
+1. Review the full migration chain used by `GenerationBatchRepository`, in order
+   (each directory below contains `prisma/migrations/<name>/migration.sql`):
+   - `20261019090000_add_ai_generation_staging`: batches, items, attempts and outbox.
+   - `20261019100000_add_ai_review_commit`: review audit, item revisions/approval
+     and committed-question relationships.
+   - `20261021090000_add_learning_documents`: learning documents, immutable versions
+     and their owner/topic/chapter relationships.
+   - `20261021100000_add_document_indexes`: business document indexes and version FK.
+   - `20261023090000_add_document_question_generation`: WAITING_SOURCE, source-mode,
+     source version/index/profile/query and preparation-stage columns, item provenance,
+     source FKs and lookup indexes.
+   - `20261023120000_add_generation_question_configs`: backfilled, required JSONB
+     `question_configs`.
+
    On an existing local development database with migration history already in
    sync, run `npx prisma migrate deploy` then `npx prisma generate`. Review migration
    status first (`npx prisma migrate status`); do not reset a database to resolve
-   drift. The migration has been tested on disposable PostgreSQL, and has **not**
-   been applied to your existing local or production database by this change.
+   drift. Verify all six migrations against the actual DB/schema configured for
+   the API, AI worker and document worker, including the tables/columns/FKs listed
+   above. Batch reads select `sourceVersion` even for text batches, so learning-document
+   schema is required too. Review pending SQL before applying it; these instructions
+   do not establish that your runtime DB has been migrated. Python's technical `rag`
+   schema has separate operator-run setup in [the RAG guide](rag-indexing.md).
 2. Configure PostgreSQL, `REDIS_URL` (and `REDIS_PASSWORD` if applicable), and the
    AI variables above. Set `AI_QUESTION_GENERATION_ENABLED=true` in both Nest API
    and worker environments. Start Python/FastAPI using its README.
@@ -359,8 +388,8 @@ source text and connection strings are excluded. HTTP remains a sanitized 503.
 
 | Diagnostic | Check |
 | --- | --- |
-| `P2021` | Missing table: verify both AI migrations on the database actually used by the API/worker. |
-| `P2022` | Missing column/schema mismatch: verify the review migration too. |
+| `P2021` | Missing table: verify the full migration chain in local setup step 1 on the DB/schema actually used by the API and both workers. Check generation batches/items/attempts/outbox/reviews and learning documents/versions/indexes, including the sourceVersion relation selected by batch reads. |
+| `P2022` | Missing column/schema mismatch: verify staging/review, learning-document, document-index, document-question-generation and question-config migrations. Check item revision/review fields, batch source/preparation fields, item provenance, required question_configs and their version/index/document FKs; regenerate the client and rebuild after schema changes. |
 | `P1001` | DB connectivity: running PostgreSQL, host/port and configured connection target. |
 | `PrismaClientValidationError` / `TypeError` | A stale generated client is possible; run `npx prisma generate`, rebuild and restart API/worker. Use the operation to narrow the lookup. |
 

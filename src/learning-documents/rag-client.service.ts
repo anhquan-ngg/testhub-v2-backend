@@ -1,5 +1,6 @@
 import { groundedResponseSchema } from '../question-generation/grounded-generation.contract';
-import type { QuestionFormat } from '@prisma/client';
+import { matchesQuestionConfigs } from '../question-generation/question-generation.contract';
+import type { QuestionConfig } from '../question-generation/question-generation.contract';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readAiServiceOptions } from '../question-generation/ai-service.config';
@@ -191,8 +192,7 @@ export class RagClient {
     index_ids: string[];
     query: string;
     top_k: number;
-    count: number;
-    question_format: QuestionFormat;
+    question_configs: QuestionConfig[];
   }) {
     const parsed = groundedResponseSchema.safeParse(
       await this.request('generate', body, 85_000),
@@ -200,11 +200,9 @@ export class RagClient {
     if (
       !parsed.success ||
       parsed.data.profile_id !== body.profile_id ||
-      parsed.data.questions.length !== body.count ||
-      parsed.data.questions.some(
-        (q) =>
-          q.question_format !== body.question_format ||
-          q.citations.some((c) => !body.index_ids.includes(c.chunk.index_id)),
+      !matchesQuestionConfigs(parsed.data.questions, body.question_configs) ||
+      parsed.data.questions.some((q) =>
+        q.citations.some((c) => !body.index_ids.includes(c.chunk.index_id)),
       )
     )
       throw new DocumentProcessingError('RAG_OUTPUT_INVALID');

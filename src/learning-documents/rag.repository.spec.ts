@@ -2,17 +2,36 @@ import { RagRepository } from './rag.repository';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentRepository } from './document.repository';
 
-describe('RAG revocation retry scheduling', () => {
+describe('RAG outbox scope and retry scheduling', () => {
   const indexes = { findMany: jest.fn(), updateMany: jest.fn() };
-  const repository = new RagRepository(
-    { learningDocumentIndex: indexes } as unknown as PrismaService,
-    {} as DocumentRepository,
-  );
+  const prisma = { learningDocumentIndex: indexes } as unknown as PrismaService;
+  const repository = new RagRepository(prisma, new DocumentRepository(prisma));
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(new Date('2026-10-23T00:00:00Z'));
     jest.clearAllMocks();
   });
   afterEach(() => jest.useRealTimers());
+
+  it('dispatches the oldest due indexes only within the active document scope', async () => {
+    await repository.due();
+    expect(indexes.findMany).toHaveBeenCalledWith({
+      where: {
+        status: 'QUEUED',
+        next_dispatch_at: { lte: new Date() },
+        version: {
+          document: {
+            is_deleted: false,
+            creator: { role: 'LECTURER', status: 'ACTIVE' },
+            chapter: { is_deleted: false },
+            topic: { is_deleted: false },
+          },
+        },
+      },
+      orderBy: { next_dispatch_at: 'asc' },
+      select: { id: true, step_count: true },
+      take: 25,
+    });
+  });
 
   it('selects only due unacknowledged tombstones, oldest first', async () => {
     await repository.revoked();

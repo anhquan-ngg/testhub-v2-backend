@@ -2,8 +2,12 @@ import { ApiProperty, getSchemaPath } from '@nestjs/swagger';
 import { QuestionFormat } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   Equals,
+  IsArray,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   MaxLength,
@@ -13,6 +17,29 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import {
+  GENERATION_QUESTION_TYPES,
+  MAX_GENERATION_CONFIGS,
+  MAX_GENERATION_QUESTIONS,
+} from '../question-generation.contract';
+import type { GenerationQuestionType } from '../question-generation.contract';
+
+/** One requested row; the shared zod schema enforces the total question limit. */
+export class QuestionConfigDto {
+  @ApiProperty({ enum: GENERATION_QUESTION_TYPES })
+  @IsIn(GENERATION_QUESTION_TYPES)
+  question_type: GenerationQuestionType;
+
+  @ApiProperty({ enum: QuestionFormat })
+  @IsEnum(QuestionFormat)
+  question_format: QuestionFormat;
+
+  @ApiProperty({ minimum: 1, maximum: MAX_GENERATION_QUESTIONS })
+  @IsInt()
+  @Min(1)
+  @Max(MAX_GENERATION_QUESTIONS)
+  count: number;
+}
 
 export class TextGenerationSourceDto {
   @ApiProperty({ enum: ['text'] })
@@ -72,19 +99,47 @@ export class CreateGenerationBatchDto {
   })
   source: TextGenerationSourceDto | DocumentGenerationSourceDto;
 
-  @ApiProperty({ enum: ['SINGLE_CHOICE'] })
+  @ApiProperty({
+    type: [QuestionConfigDto],
+    required: false,
+    minItems: 1,
+    maxItems: MAX_GENERATION_CONFIGS,
+    description: `Ordered rows; questions are generated in this order. Total count is at most ${MAX_GENERATION_QUESTIONS}. Required unless the legacy question_type/question_format/count fields are sent.`,
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_GENERATION_CONFIGS)
+  @ValidateNested({ each: true })
+  @Type(() => QuestionConfigDto)
+  question_configs?: QuestionConfigDto[];
+
+  @ApiProperty({
+    enum: ['SINGLE_CHOICE'],
+    required: false,
+    deprecated: true,
+    description: 'Legacy single-row form; use question_configs',
+  })
+  @IsOptional()
   @Equals('SINGLE_CHOICE')
-  question_type: string;
+  question_type?: string;
 
-  @ApiProperty({ enum: QuestionFormat })
+  @ApiProperty({ enum: QuestionFormat, required: false, deprecated: true })
+  @IsOptional()
   @IsEnum(QuestionFormat)
-  question_format: QuestionFormat;
+  question_format?: QuestionFormat;
 
-  @ApiProperty({ minimum: 1, maximum: 20 })
+  @ApiProperty({
+    minimum: 1,
+    maximum: MAX_GENERATION_QUESTIONS,
+    required: false,
+    deprecated: true,
+  })
+  @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(20)
-  count: number;
+  @Max(MAX_GENERATION_QUESTIONS)
+  count?: number;
 
   @ApiProperty({ enum: ['vi'] })
   @Equals('vi')

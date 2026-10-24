@@ -5,6 +5,8 @@ import {
   QuestionGenerationItemStatus,
   QuestionType,
 } from '@prisma/client';
+import { GENERATION_QUESTION_TYPES } from '../question-generation.contract';
+import { QuestionConfigDto } from './create-generation-batch.dto';
 
 /** Accepted command resource, excluding internal queue/execution identifiers. */
 export class AcceptedGenerationBatchDto {
@@ -34,10 +36,22 @@ export class GenerationBatchResponseDto {
   @ApiProperty({ format: 'uuid' }) chapter_id: string;
   @ApiProperty({ enum: QuestionGenerationBatchStatus })
   status: QuestionGenerationBatchStatus;
-  @ApiProperty({ enum: [QuestionType.SINGLE_CHOICE] })
+  @ApiProperty({
+    enum: GENERATION_QUESTION_TYPES,
+    deprecated: true,
+    description: 'First question_configs row',
+  })
   question_type: QuestionType;
-  @ApiProperty({ enum: QuestionFormat }) question_format: QuestionFormat;
-  @ApiProperty() requested_count: number;
+  @ApiProperty({
+    enum: QuestionFormat,
+    deprecated: true,
+    description: 'First question_configs row',
+  })
+  question_format: QuestionFormat;
+  @ApiProperty({ type: [QuestionConfigDto] })
+  question_configs: QuestionConfigDto[];
+  @ApiProperty({ description: 'Total of question_configs counts' })
+  requested_count: number;
   @ApiProperty() total_items: number;
   @ApiProperty({ type: String, nullable: true }) error_code: string | null;
   @ApiProperty({ type: String, format: 'date-time' }) created_at: Date;
@@ -56,7 +70,11 @@ export class GeneratedQuestionDto {
   @ApiProperty() question_text: string;
   @ApiProperty({ type: [GeneratedOptionDto], minItems: 4, maxItems: 4 })
   options: GeneratedOptionDto[];
-  @ApiProperty({ enum: [QuestionType.SINGLE_CHOICE] })
+  @ApiProperty({
+    enum: GENERATION_QUESTION_TYPES,
+    description:
+      'SINGLE_CHOICE has exactly one correct option; MULTIPLE_CHOICE has two or three',
+  })
   question_type: QuestionType;
   @ApiProperty({ enum: QuestionFormat }) question_format: QuestionFormat;
   @ApiProperty({ type: String, nullable: true, example: null })

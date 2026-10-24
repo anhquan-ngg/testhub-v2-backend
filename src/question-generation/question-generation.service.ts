@@ -90,8 +90,7 @@ export class QuestionGenerationService {
     const result = await this.client.generate({
       text: command.source.text,
       topic: Array.from(owned.topic.name.trim()).slice(0, 200).join('') || null,
-      question_format: command.question_format,
-      count: command.count,
+      question_configs: command.question_configs,
     });
     // Ownership may be revoked while the external call is running.
     await this.authorizeTarget(actor, command);

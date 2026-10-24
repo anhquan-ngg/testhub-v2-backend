@@ -37,7 +37,14 @@ export class UsersRepository {
   }
 
   async findMany(query: QueryUserDto) {
-    const { page = 1, limit = 10, search, role, status } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      role,
+      status,
+      sortOrder = 'desc',
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.UserWhereInput = {
@@ -56,7 +63,7 @@ export class UsersRepository {
         where,
         skip,
         take: limit,
-        orderBy: { created_at: 'desc' },
+        orderBy: [{ created_at: sortOrder }, { id: sortOrder }],
         select: this.select,
       }),
       this.prisma.user.count({ where }),

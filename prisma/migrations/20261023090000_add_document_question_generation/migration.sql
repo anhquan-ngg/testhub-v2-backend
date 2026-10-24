@@ -18,3 +18,9 @@ ALTER TABLE "question_generation_batches" ADD CONSTRAINT "question_generation_ba
 
 -- AddForeignKey
 ALTER TABLE "question_generation_batches" ADD CONSTRAINT "question_generation_batches_source_index_id_fkey" FOREIGN KEY ("source_index_id") REFERENCES "learning_document_indexes"("id") ON DELETE NO ACTION ON UPDATE CASCADE;
+
+-- CreateIndex
+CREATE INDEX "question_generation_batches_source_version_id_idx" ON "question_generation_batches"("source_version_id");
+
+-- CreateIndex
+CREATE INDEX "question_generation_batches_source_index_id_idx" ON "question_generation_batches"("source_index_id");

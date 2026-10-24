@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { totalQuestionCount } from './question-generation.contract';
 import type {
   GenerationCommand,
   GeneratedQuestion,
@@ -25,6 +26,7 @@ const publicBatchSelect = {
   status: true,
   question_type: true,
   question_format: true,
+  question_configs: true,
   sourceVersion: {
     select: { file_name: true, version: true, document_id: true },
   },
@@ -143,9 +145,11 @@ export class GenerationBatchRepository {
                   preparation_stage: 'EXTRACTING',
                 }
               : {}),
-            question_type: command.question_type,
-            question_format: command.question_format,
-            requested_count: command.count,
+            // Legacy columns summarize the first row for older readers.
+            question_type: command.question_configs[0].question_type,
+            question_format: command.question_configs[0].question_format,
+            question_configs: command.question_configs,
+            requested_count: totalQuestionCount(command.question_configs),
             language: command.language,
             consented_at: new Date(),
             outbox: { create: {} },

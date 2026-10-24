@@ -229,8 +229,13 @@ integration('NestJS -> FastAPI real HTTP contract (fake LLM)', () => {
     ).rejects.toMatchObject({ code: 'RAG_SCOPE_UNAVAILABLE' });
     const generated = await client.generate({
       ...query,
-      question_format: 'KNOWLEDGE',
-      count: 1,
+      question_configs: [
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'KNOWLEDGE',
+          count: 1,
+        },
+      ],
     });
     expect(generated.questions[0].citations[0].chunk.version_id).toBe(
       command.scope.version_id,

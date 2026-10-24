@@ -95,10 +95,47 @@ describe('Document generation public contract', () => {
       expect.objectContaining({ command, ownerId: owner }),
     );
   });
+  it('accepts ordered mixed rows and normalizes the legacy single-row form', async () => {
+    const questionConfigs = [
+      {
+        question_type: 'MULTIPLE_CHOICE',
+        question_format: 'APPLYING',
+        count: 2,
+      },
+      {
+        question_type: 'SINGLE_CHOICE',
+        question_format: 'KNOWLEDGE',
+        count: 3,
+      },
+    ];
+    const { question_configs: legacyConfigs, ...legacy } = command;
+    for (const [input, expected] of [
+      [
+        { ...command, question_configs: questionConfigs },
+        { ...command, question_configs: questionConfigs },
+      ],
+      [{ ...legacy, ...legacyConfigs[0] }, command],
+    ] as const) {
+      batches.create.mockClear();
+      await request(app.getHttpServer() as Server)
+        .post('/question-generation-batches')
+        .set('Idempotency-Key', 'document-command-fixture')
+        .send(input)
+        .expect(202);
+      expect(batches.create).toHaveBeenCalledWith(
+        expect.objectContaining({ command: expected }),
+      );
+    }
+  });
   it('rejects unknown source keys, coerced numbers and missing consent before disclosure', async () => {
+    const [config] = command.question_configs;
     for (const input of [
       { ...command, source: { ...command.source, object_key: 'foreign' } },
       { ...command, count: '1' },
+      { ...command, question_configs: [{ ...config, count: '1' }] },
+      { ...command, question_configs: [{ ...config, essay: true }] },
+      { ...command, question_configs: [{ ...config, question_type: 'ESSAY' }] },
+      { ...command, question_configs: [{ ...config, count: 21 }] },
       { ...command, external_processing_consent: false },
       { ...command, source: { mode: 'document', version_id: 'invalid' } },
     ])
