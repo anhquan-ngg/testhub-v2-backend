@@ -1,5 +1,57 @@
 # CONTINUITY.md — testhub-v2-backend
 
+## Local migration status (2026-10-25)
+
+- The user's local database `testhub` (Docker `testhub_db`, localhost:5432)
+  has applied `20261024090000_add_auth_sessions` and
+  `20261025090000_reconcile_question_generation_source_indexes`.
+  Prisma migrate dev reported database/schema in sync after the guarded repair.
+- A full backup was saved under .tmp/migration-backups/ before repair. Existing
+  migration files were unchanged; no reset, db push or production mutation ran.
+- Procedure: docs/migration-repair-source-indexes.md. Future changes require new
+  migrations. App/browser E2E and production migration state remain unverified.
+
+## Authentication sessions (2026-10-25)
+
+- Added AuthSession and additive migration 20261024090000_add_auth_sessions.
+  Unique nullable student_slot enforces one active STUDENT browser session;
+  LECTURER/ADMIN retain multiple. Old JWTs require login again (sid/token_use).
+  Restart both apps and log in again after deploying session-aware code.
+- Valid credentials create a PENDING transfer without revoking the old browser.
+  Target browser confirms; while any IN_PROGRESS exam exists, responsible
+  lecturer (all current exams) or ADMIN approval is mandatory. Recheck under a
+  user-row lock. Ten-minute proof permits idempotent replay after lost response,
+  but cannot revive a revoked session. Keep answers/attempt/deadline unchanged.
+- JwtStrategy checks live session on every request. Refresh is provider-independent
+  and rotates under lock with a 10-second bounded previous-token grace returning
+  the exact successor. Logout revokes only current sid. Cookie TTL matches JWT,
+  NODE_ENV fixes Secure, POST /auth/* requires an allowed Origin, responses no-store.
+- StudentSessionInterceptor serializes submission/exam-runtime writes and the
+  legacy mutating GET session with transfer using PrismaService.current and
+  inTransaction; queues/realtime effects are deferred until commit. Runtime WS
+  heartbeat also fences writes. SSE/socket revocation checks run every 5 seconds;
+  notifications now authenticate cookie JWT rather than trusting query identity.
+  Socket binding rejects connections closed during authentication before storing
+  claims or registering a revocation timer.
+- Added disposable PostgreSQL + real Nest/AuthModule/Passport HTTP integration
+  coverage, including actual exam start/save/ping/submit, concurrent starts,
+  confirmation replay, approval scope, refresh races, rollback and cookie Origin.
+  Separate duration tests verify matching positive JWT/cookie lifetimes.
+- Validation and operator instructions: docs/auth-sessions.md. Production and
+  OAuth-provider/browser E2E remain unverified. Frontend host cookie
+  topology remains a deployment prerequisite; no dependencies/env values changed.
+- Final checks: full Jest 31 suites / 268 tests passed, 42 unrelated opt-in tests
+  skipped; includes 19 auth PostgreSQL/HTTP cases and 13 duration cases. TypeScript,
+  Nest build and lint on new/core auth files passed. Changed legacy backend files
+  retain lint debt (comparison found no added diagnostics). Final migration was
+  applied over HEAD's schema in an isolated PostgreSQL schema (17 new columns).
+  Frontend TypeScript/scoped lint, navigation/client checks, 32 i18n pairs and
+  production build passed. PostgreSQL test container is disposable and separate
+  from the user's services.
+- Socket review validation: 4 lifecycle tests and 13 duration tests passed;
+  TypeScript and scoped ESLint passed. Tests use fake timers and isolated service
+  doubles, without a database or live Socket.IO connection.
+
 ## User list ordering (2026-10-23)
 
 - GET /users accepts optional sortOrder=asc|desc (default desc), validated and
@@ -30,9 +82,8 @@
 
 - Contract, DTO, repository, worker/recovery, AI/RAG clients and response DTOs use
   question_configs; legacy single-row commands are still accepted.
-- New migration 20261023120000_add_generation_question_configs was written by hand
-  (add, backfill, set NOT NULL) and **not applied**. Run `npx prisma migrate dev`
-  on a local DB before using the feature.
+- Migration 20261023120000_add_generation_question_configs adds, backfills and
+  requires question_configs (NOT NULL).
 - Validation: `npx prisma generate`, typecheck clean; full `npx jest`
   **232 passed, 42 skipped** (opt-in DB/Redis/FastAPI suites); eslint clean on
   changed files. Opt-in integration suites were not run.
@@ -41,7 +92,7 @@
 
 - RagDispatcher observes queue.client once without blocking reconciliation or shutdown on initial Redis readiness; rejected initialization is handled. GenerationDispatcher already used this pattern and required no change.
 - Revocation errors no longer prevent indexing dispatch. Failed tombstones persist per-row exponential backoff (5 seconds to 5 minutes) using existing failure_count/next_dispatch_at; due revocations are ordered oldest first and acknowledged only after remote success.
-- Source version/index relations and the untracked, not-yet-applied 20261023090000 migration now use NO ACTION, allowing root cascades to complete within one statement while blocking direct referenced-source deletion. No user database migration was executed. Added opt-in PostgreSQL coverage for both Topic/Chapter cascades and direct deletion rejection; it was skipped without a disposable test database.
+- Source version/index relations use NO ACTION, allowing root cascades to complete within one statement while blocking direct referenced-source deletion. Opt-in PostgreSQL coverage checks both Topic/Chapter cascades and direct deletion rejection.
 - Reviewed all assertOfficeZipLimits call sites: question-import.service already awaits it and sends checkedPackage to both parsers; parser fixture tests also await the checked archive. No ZIP code change was necessary.
 - README and AI/document guides now reflect implemented embedding, retrieval and attached-file generation. Migration inventory verified from disk: 21 migration.sql files, latest 20261023090000_add_document_question_generation.
 - Validation: 25 focused tests passed; full Jest 218 passed / 42 skipped (28 suites passed / 4 skipped, without opt-in HTTP/PostgreSQL/Redis settings). Prisma generate, offline schema SQL diff, TypeScript and Nest build passed. Scoped ESLint passed after correcting two test-only floating-promise warnings. No live DB/S3/Google calls or deployment.
@@ -69,7 +120,7 @@
   The separate document worker still owns extraction/index checkpoints. Preparation
   expires after 20 minutes; never retry ambiguous LLM calls automatically.
 - Migration 20261023090000_add_document_question_generation adds source FKs and
-  nullable item provenance. It was generated offline, not applied to user DB.
+  nullable item provenance.
 - DocumentGenerationService authorizes sources before/after internal generation.
   RagAccessModule shares authorization/index clients without S3 configuration.
   POST /internal/rag/generate returns rag-generation.v1, with checked evidence.
@@ -118,7 +169,7 @@
 
 > Trạng thái và bàn giao giữa các phiên làm việc. Đọc trước khi làm việc; cập nhật sau mỗi nhiệm vụ có thay đổi đáng kể.
 
-**Cập nhật lần cuối:** 2026-10-23 — bàn giao sinh câu hỏi từ tệp/RAG và sửa review dispatcher, khóa ngoại nguồn; chưa áp migration vào database người dùng.
+**Cập nhật lần cuối:** 2026-10-25 — database local đã đồng bộ migration auth-session và source indexes; đã đối chiếu xác thực và vòng đời socket.
 
 ## Learning documents và extraction (2026-10-21)
 
@@ -165,14 +216,14 @@
 
 - Nhánh `dev`, đồng bộ với `origin/dev` khi khảo sát; working tree sạch trước khi thêm 3 file tài liệu này. Commit mới nhất: `0f87eba` (2026-09-29) — chapter update logic, giới hạn zip khi import.
 - Module đăng ký trong `src/app.module.ts`: Encryption, Auth, Prisma, S3, Notification, ExamRuntime, Submission, Users, Topics, Chapters, Questions, Exams, ExamRegistrations, Files, QuestionImport, ExamPrint, QuestionGeneration.
-- `prisma/migrations/` có 21 migration; mới nhất `20261023090000_add_document_question_generation`, gồm các migration tài liệu `20261021090000_add_learning_documents` và RAG `20261021100000_add_document_indexes`. Các migration mới được tạo offline, chưa áp lên DB người dùng; trạng thái DB local/production hiện tại chưa xác minh.
+- `prisma/migrations/` có 24 migration; mới nhất `20261025090000_reconcile_question_generation_source_indexes`. Database local đã được Prisma xác nhận đồng bộ sau khi áp migration auth-session và source indexes; trạng thái production chưa xác minh.
 - Tính năng gần đây theo git log: import câu hỏi từ .docx/.xlsx (`src/question-imports/`), giám sát phòng thi (`src/exam-runtime/exam-monitor-aggregator.service.ts`), thứ tự câu hỏi trong bài làm, in đề (`src/exam-print/`).
 
 ## Quyết định kiến trúc đã thể hiện trong code
 
 - Prisma 7 dùng driver adapter `PrismaPg` + `pg.Pool` — `src/prisma/prisma.service.ts`; `PrismaModule` là `@Global()`.
 - Phân lớp controller → service → repository; repository giữ truy vấn Prisma với `select` tường minh — ví dụ `src/topics/`.
-- Xác thực bằng cookie httpOnly `access_token` (15 phút) + `refresh_token` (7 ngày, `path: /auth/refresh`), hash refresh token lưu ở `Account.refresh_token_hash` — `src/auth/auth.controller.ts`, `src/auth/auth.service.ts`, `src/auth/strategies/`.
+- Xác thực bằng cookie httpOnly access/refresh có sid, hash lưu theo AuthSession; STUDENT một phiên, staff nhiều phiên. Xem mục Authentication sessions và docs/auth-sessions.md; Account token columns chỉ giữ tương thích.
 - Không có guard toàn cục; mỗi controller tự gắn `JwtGuard`/`RolesGuard` + `@Roles` — `src/common/`.
 - Realtime phòng thi dùng SSE với whitelist loại sự kiện cho sinh viên (`STUDENT_EVENT_TYPES`) và giám sát (`MONITOR_EVENT_TYPES`) — `src/exam-runtime/exam-runtime.constants.ts`, `exam-runtime.controller.ts`. Sinh viên ping HTTP (`/exam-runtime/submissions/:id/ping`), vi phạm do client tự báo chỉ gồm các loại trong `CLIENT_REPORTABLE_VIOLATION_TYPES`; `CONNECTION_LOST` chỉ do server sinh.
 - BullMQ hai queue: `exam-runtime` (mở/đóng thi, auto-submit, chấm điểm, dọn session) và `question-imports` (parse, dọn import hết hạn) — `*.constants.ts`, `*.processor.ts` tương ứng.
@@ -187,8 +238,8 @@
 
 ## Vấn đề / TODO đã xác minh
 
-1. Gateway `/notifications` tin `userId`/`userRole` từ `handshake.query`, không verify JWT ⇒ client bất kỳ có thể nhận thông báo của người khác hoặc vào `room:admin` (`src/notification/notification.gateway.ts:33-52`). Vấn đề bảo mật, chưa sửa.
-2. Gateway `/exam-runtime` verify token bằng `JwtService` mặc định (secret `JWT_SECRET` trong `src/auth/auth.module.ts`) trong khi access token được ký bằng `JWT_ACCESS_SECRET`; frontend hiện không dùng namespace này.
+1. Gateway `/notifications` đã chuyển sang cookie JWT + AuthSession ngày 2026-10-25; không còn tin danh tính query.
+2. Gateway `/exam-runtime` đã dùng JWT_ACCESS_SECRET/AuthSession và kiểm tra thu hồi ngày 2026-10-25; frontend hiện dùng REST ping thay namespace này.
 3. Frontend gọi `POST /model/File/updateMany` (`../testhub-v2/src/hooks/useFiles.ts`) nhưng backend không có route `/model/*`.
 4. `npm run seed` trỏ tới `prisma/seed.ts` không tồn tại.
 5. README hướng dẫn `cp .env.example .env` nhưng repo không có `.env.example`.
@@ -245,7 +296,7 @@ Chưa có thông tin.
 
 ## Bước tiếp theo đề xuất
 
-Ưu tiên AI tiếp theo: kiểm thử thao tác trình duyệt với session local, review/apply hai migration AI trên DB đích, đăng ký/giám sát worker khi triển khai; quyết định retention/quota/ngân sách. Sau đó mới mở rộng nguồn PDF/PPTX/RAG. Review/edit/approved commit và workspace đã có; chưa deploy production.
+Ưu tiên AI tiếp theo: kiểm thử thao tác trình duyệt với session local, đăng ký/giám sát worker khi triển khai; quyết định retention/quota/ngân sách. Sau đó mới mở rộng nguồn PDF/PPTX/RAG. Review/edit/approved commit và workspace đã có; chưa deploy production.
 
 Các ứng viên còn lại: thêm xác thực JWT cho gateway `/notifications`; thống nhất secret cho gateway `/exam-runtime`; thêm `.env.example` chỉ chứa tên biến; cập nhật README sau khi bỏ ZenStack.
 
@@ -296,7 +347,7 @@ Các ứng viên còn lại: thêm xác thực JWT cho gateway `/notifications`;
   metadata reviewed_by/reviewed_at/committed_at và `QuestionGenerationReview`
   (actor/action/revision/before-after data/status/question mapping). Không sửa
   migration đã có. Kiểm tra cả hai migration từ baseline trên PostgreSQL 17 tạm
-  thành công: 5 bảng nghiệp vụ AI, 4 enum AI. Chưa áp DB hiện có.
+  thành công: 5 bảng nghiệp vụ AI, 4 enum AI.
 - API mới: GET batches (history), PATCH `/:id/items/:itemId`, POST
   `/:id/items/:itemId/review`, POST `/:id/commit`. JWT cookie/lecturer/owner,
   schema raw strict, revision bắt buộc. Sửa hủy duyệt, tăng revision; APPROVED
@@ -322,13 +373,6 @@ Các ứng viên còn lại: thêm xác thực JWT cho gateway `/notifications`;
 
 ## Chẩn đoán AI staging storage (2026-10-19)
 
-- Người dùng gặp log chỉ có event `ai_staging_storage_unavailable`. Chưa đủ
-  bằng chứng để kết luận thiếu bảng/cột, mất kết nối hay stale Prisma Client.
-  Không đọc `.env`, kết nối/áp migration DB hiện có hoặc gọi Gemini trong tác vụ.
-- Người dùng sau đó xác nhận **chưa áp dụng hai migration AI** và yêu cầu hướng
-  dẫn. Thiếu schema là nguyên nhân cần kiểm tra trước; hướng dẫn kiểm tra migrate
-  status, áp migration bằng migrate dev trên đúng DB local, generate/build/restart.
-  Chưa có kết quả migration/runtime sau khi người dùng thực hiện.
 - `GenerationBatchService` ghi thêm operation cố định (authorize/create/get/list),
   error_type allowlist và mã Prisma Pxxxx khi có. Không log error.name/message/
   stack/meta, source, token hoặc connection string; HTTP vẫn sanitized 503.

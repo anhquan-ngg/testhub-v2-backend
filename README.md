@@ -1,5 +1,13 @@
 # TestHub V2 - Backend System
 
+## Authentication sessions
+
+Students have one active browser session. A device switch requires explicit
+confirmation and responsible-lecturer/admin approval while an exam is in progress.
+Lecturers/admins retain independent sessions across devices. Apply the additive
+`20261024090000_add_auth_sessions` migration explicitly and restart both apps;
+existing tokens require login again. See [auth session setup and contract](docs/auth-sessions.md).
+
 ## File-based RAG question generation (2026-10-23)
 
 - The batch API also accepts source.mode=document with immutable version_id and

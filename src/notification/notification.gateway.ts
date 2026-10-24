@@ -9,6 +9,8 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { NotificationService } from './notification.service';
+import { AuthSessionService } from '../auth/auth-session.service';
+import type { SessionClaims } from '../auth/auth-session.service';
 
 type NotificationCreateInput = Record<string, unknown>;
 
@@ -27,33 +29,24 @@ export class NotificationGateway
   @WebSocketServer()
   server!: Server;
 
-  constructor(private readonly notificationService: NotificationService) {}
+  constructor(
+    private readonly notificationService: NotificationService,
+    private readonly sessions: AuthSessionService,
+  ) {}
 
   // Lifecycle methods
   async handleConnection(client: Socket) {
     try {
-      const userId = client.handshake.query.userId as string;
-      const userRole = client.handshake.query.userRole as string;
-
-      if (!userId) {
-        client.disconnect();
-        return;
-      }
-
-      // Mỗi user join room riêng: "user:{userId}"
-      client.join(`user:${userId}`);
-      console.log(`User ${userId} connected [${client.id}] role=${userRole}`);
-
-      // Admin users join a shared admin room for dashboard updates
-      if (userRole === 'ADMIN') {
-        client.join('room:admin');
-        console.log(`Admin ${userId} joined room:admin`);
-      }
+      const claims = await this.sessions.bindSocket(client);
+      const userId = claims.sub;
+      (client.data as { userId?: string }).userId = userId;
+      await client.join('user:' + userId);
+      if (claims.role === 'ADMIN') await client.join('room:admin');
 
       const unread = await this.notificationService.getUnread(userId);
       client.emit('notification:unread', unread);
     } catch (error) {
-      console.error('Error in handleConnection:', error);
+      void error;
       client.emit('connect_error', {
         message: 'Internal server error during connection',
       });
@@ -73,9 +66,12 @@ export class NotificationGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() notificationId: string,
   ) {
-    await this.notificationService.markAsRead(notificationId);
+    const claims = (client.data as { sessionClaims: SessionClaims })
+      .sessionClaims;
+    await this.sessions.assertActive(claims);
+    await this.notificationService.markAsRead(notificationId, claims.sub);
     // Trả về unread count mới
-    const userId = client.handshake.query.userId as string;
+    const userId = claims.sub;
     const count = await this.notificationService.countUnread(userId);
     client.emit('notification:unread_count', count);
   }
@@ -83,7 +79,10 @@ export class NotificationGateway
   // Client đánh dấu đọc tất cả
   @SubscribeMessage('notification:mark_all_read')
   async handleMarkAllRead(@ConnectedSocket() client: Socket) {
-    const userId = client.handshake.query.userId as string;
+    const claims = (client.data as { sessionClaims: SessionClaims })
+      .sessionClaims;
+    await this.sessions.assertActive(claims);
+    const userId = claims.sub;
     await this.notificationService.markAllAsRead(userId);
     client.emit('notification:unread_count', 0);
   }
@@ -91,10 +90,7 @@ export class NotificationGateway
   // ─── Methods gọi từ các Service khác ─────────────────────────────────────
 
   // Gửi notification đến một user cụ thể
-  async sendToUser(
-    userId: string,
-    notification: NotificationCreateInput,
-  ) {
+  async sendToUser(userId: string, notification: NotificationCreateInput) {
     const saved = await this.notificationService.create(notification);
     this.server.to(`user:${userId}`).emit('notification:new', saved);
     const count = await this.notificationService.countUnread(userId);

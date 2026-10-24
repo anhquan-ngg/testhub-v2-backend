@@ -91,7 +91,10 @@ export class SubmissionService {
     return this.examRuntimeService.getSession(examId, studentId);
   }
 
-  async submitByQuestion(submitQuestionDto: SubmitQuestionDto, studentId: string) {
+  async submitByQuestion(
+    submitQuestionDto: SubmitQuestionDto,
+    studentId: string,
+  ) {
     // Ownership + status + not-deleted, all in one query. Previously this
     // looked the submission up by id alone: any authenticated user holding
     // a submission UUID could write answers into someone else's exam —
@@ -99,7 +102,7 @@ export class SubmissionService {
     // endpoint that produces the "answered / total" count now shown live
     // on the lecturer's monitoring page, so it doubles as that feature's
     // integrity foundation.
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         id: submitQuestionDto.submission_id,
         student_id: studentId,
@@ -113,7 +116,7 @@ export class SubmissionService {
       throw new NotFoundException('Active submission not found');
     }
 
-    const question = await this.prisma.question.findUnique({
+    const question = await this.prisma.current.question.findUnique({
       where: {
         id: submitQuestionDto.question_id,
       },
@@ -201,30 +204,33 @@ export class SubmissionService {
       score = is_correct ? 1 : 0;
     }
 
-    const submissionQuestion = await this.prisma.submissionQuestions.upsert({
-      where: {
-        submission_id_question_id: {
+    const submissionQuestion =
+      await this.prisma.current.submissionQuestions.upsert({
+        where: {
+          submission_id_question_id: {
+            submission_id: submitQuestionDto.submission_id,
+            question_id: submitQuestionDto.question_id,
+          },
+        },
+        update: {
+          answer: submitQuestionDto.answer,
+          options: submitQuestionDto.options,
+          score: Math.round(score * 100) / 100,
+          is_correct,
+        },
+        create: {
           submission_id: submitQuestionDto.submission_id,
           question_id: submitQuestionDto.question_id,
+          answer: submitQuestionDto.answer,
+          options: submitQuestionDto.options,
+          score: Math.round(score * 100) / 100,
+          is_correct,
         },
-      },
-      update: {
-        answer: submitQuestionDto.answer,
-        options: submitQuestionDto.options,
-        score: Math.round(score * 100) / 100,
-        is_correct,
-      },
-      create: {
-        submission_id: submitQuestionDto.submission_id,
-        question_id: submitQuestionDto.question_id,
-        answer: submitQuestionDto.answer,
-        options: submitQuestionDto.options,
-        score: Math.round(score * 100) / 100,
-        is_correct,
-      },
-    });
+      });
 
-    this.monitor.markDirty(submission.exam_id, submission.id);
+    await this.prisma.afterCommit(() =>
+      this.monitor.markDirty(submission.exam_id, submission.id),
+    );
 
     return {
       data: {
@@ -265,7 +271,7 @@ export class SubmissionService {
   }
 
   async getSubmissionOwner(submissionId: string) {
-    const submission = await this.prisma.submission.findUnique({
+    const submission = await this.prisma.current.submission.findUnique({
       where: {
         id: submissionId,
       },

@@ -164,6 +164,8 @@ model User {
   phone                 String?
   address               String?
   accounts              Account[]
+  authSessions          AuthSession[] @relation("SessionOwner")
+  approvedAuthSessions  AuthSession[] @relation("SessionApprover")
   exams                 Exam[]
   topics                Topic[]
   submissions           Submission[]
@@ -182,6 +184,33 @@ model User {
   @@index([role])
   @@index([status])
   @@map("users")
+}
+
+model AuthSession {
+  id                    String   @id @db.Uuid
+  user_id               String   @db.Uuid
+  status                String   @default("ACTIVE")
+  /// Unique nullable slot, set to user_id only for an ACTIVE student session.
+  student_slot          String?  @unique @db.Uuid
+  created_at            DateTime @default(now())
+  expires_at            DateTime
+  revoked_at            DateTime?
+  refresh_token_hash    String
+  /// Short-lived proof permits safe replay if the browser loses confirmation response.
+  transfer_token_hash   String?
+  refresh_jti           String   @db.Uuid
+  refresh_issued_at     Int
+  previous_refresh_hash String?
+  previous_valid_until  DateTime?
+  previous_session_id   String?  @db.Uuid
+  approval_required     Boolean  @default(false)
+  approved_by           String?  @db.Uuid
+  approved_at           DateTime?
+  user                  User     @relation("SessionOwner", fields: [user_id], references: [id], onDelete: Cascade)
+  approver              User?    @relation("SessionApprover", fields: [approved_by], references: [id], onDelete: SetNull)
+
+  @@index([user_id, status, expires_at])
+  @@map("auth_sessions")
 }
 
 model Account {

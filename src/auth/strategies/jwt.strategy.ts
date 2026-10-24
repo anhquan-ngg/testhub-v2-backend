@@ -4,11 +4,13 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@/prisma/prisma.service';
+import { AuthSessionService, SessionClaims } from '../auth-session.service';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(
     config: ConfigService,
     private prisma: PrismaService,
+    private readonly sessions: AuthSessionService,
   ) {
     const secret = config.get<string>('JWT_ACCESS_SECRET');
 
@@ -20,14 +22,18 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
-        (request: Request) => request?.cookies?.['access_token'] ?? null,
+        (request: Request) => {
+          const token: unknown = request?.cookies?.access_token;
+          return typeof token === 'string' ? token : null;
+        },
       ]),
       ignoreExpiration: false,
       secretOrKey: secret,
     });
   }
 
-  async validate(payload: { sub: string; email: string; role: string }) {
+  async validate(payload: SessionClaims) {
+    await this.sessions.assertActive(payload);
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {
@@ -62,6 +68,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     const { files, ...userWithoutFiles } = user;
 
-    return { ...userWithoutFiles, avatar_url: files[0]?.url };
+    return {
+      ...userWithoutFiles,
+      avatar_url: files[0]?.url,
+      session_id: payload.sid,
+    };
   }
 }

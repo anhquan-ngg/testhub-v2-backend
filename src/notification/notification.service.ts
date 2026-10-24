@@ -8,7 +8,7 @@ export class NotificationService {
   constructor(private readonly prisma: PrismaService) {}
 
   private get prismaUnsafe(): Record<string, any> {
-    return this.prisma as unknown as Record<string, any>;
+    return this.prisma.current as unknown as Record<string, any>;
   }
 
   async getUnread(userId: string) {
@@ -32,10 +32,11 @@ export class NotificationService {
     });
   }
 
-  async markAsRead(notificationId: string) {
+  async markAsRead(notificationId: string, userId: string) {
     return this.prismaUnsafe.notification.update({
       where: {
         id: notificationId,
+        recipient_id: userId,
       },
       data: {
         is_read: true,
