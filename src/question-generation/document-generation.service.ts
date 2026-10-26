@@ -14,11 +14,13 @@ import {
   QuestionConfig,
 } from './question-generation.contract';
 import { QuestionProvenance } from './grounded-generation.contract';
+import { expandPlanItems, frozenPlanSchema } from './knowledge-plan.contract';
 
 type SourceInput = {
   created_by: string;
   topic_id: string;
-  chapter_id: string;
+  chapter_id: string | null;
+  plan_snapshot?: unknown;
   source_version_id: string | null;
   source_index_id: string | null;
   source_profile_id: string | null;
@@ -45,7 +47,7 @@ export class DocumentGenerationService {
       );
   }
   /** Validate upload completion, consent and matching subject/chapter before accepting a batch. */
-  async authorize(owner: string, command: GenerationCommand) {
+  async authorize(owner: string, command: GenerationCommand, plan?: unknown) {
     this.enabled();
     if (command.source.mode !== 'document')
       this.fail('AI_DOCUMENT_SOURCE_INVALID');
@@ -53,6 +55,7 @@ export class DocumentGenerationService {
       created_by: owner,
       topic_id: command.topic_id,
       chapter_id: command.chapter_id,
+      plan_snapshot: plan,
       source_version_id: command.source.version_id,
       source_index_id: null,
       source_profile_id: null,
@@ -68,7 +71,8 @@ export class DocumentGenerationService {
     if (
       !source ||
       source.document.topic_id !== input.topic_id ||
-      source.document.chapter_id !== input.chapter_id ||
+      (!input.plan_snapshot &&
+        source.document.chapter_id !== input.chapter_id) ||
       !source.consented_at ||
       source.status === 'UPLOADING'
     )
@@ -126,6 +130,10 @@ export class DocumentGenerationService {
         .slice(0, 300)
         .join('');
     let result: Awaited<ReturnType<RagClient['generate']>>;
+    const plan = input.plan_snapshot
+      ? frozenPlanSchema.parse(input.plan_snapshot)
+      : null;
+    const slots = plan ? expandPlanItems(plan) : null;
     try {
       result = await this.client.generate({
         owner_id: input.created_by,
@@ -134,6 +142,9 @@ export class DocumentGenerationService {
         query,
         top_k: 8,
         question_configs: input.question_configs,
+        ...(plan
+          ? { plan_items: plan.items.map(({ node_id, ...item }) => item) }
+          : {}),
       });
     } catch (error) {
       if (error instanceof DocumentProcessingError)
@@ -157,14 +168,22 @@ export class DocumentGenerationService {
     if (!current || current.status !== 'READY')
       this.fail('AI_DOCUMENT_SOURCE_INVALID');
     const provenance: QuestionProvenance[] = [];
-    const questions = result.questions.map((question) => {
-      const { citations, ...data } = question;
+    const questions = result.questions.map((question, position) => {
+      const { citations, plan_item_id, ...data } = question;
+      const slot = slots?.[position];
+      if ((slot && plan_item_id !== slot.id) || (!slot && plan_item_id))
+        this.fail('AI_DOCUMENT_SOURCE_INVALID');
       for (const { chunk } of citations)
         if (
           chunk.index_id !== index.id ||
           chunk.document_id !== source.document_id ||
           chunk.version_id !== source.id ||
           chunk.source_sha256 !== source.source_sha256 ||
+          (slot &&
+            !slot.source_units.some(
+              (unit) =>
+                unit.kind === chunk.kind && unit.position === chunk.position,
+            )) ||
           createHash('sha256').update(chunk.text).digest('hex') !==
             chunk.text_sha256
         )
@@ -178,6 +197,13 @@ export class DocumentGenerationService {
         profile_id: result.profile_id,
         quality_status: 'UNASSESSED',
         citations,
+        ...(slot
+          ? {
+              plan_item_id: slot.id,
+              knowledge_title: slot.knowledge_title,
+              objective: slot.objective,
+            }
+          : {}),
       });
       return data;
     });

@@ -180,6 +180,7 @@ model User {
   questionGenerationBatches QuestionGenerationBatch[]
   questionGenerationReviews QuestionGenerationReview[]
   learningDocuments LearningDocument[]
+  knowledgePlans KnowledgePlan[]
 
   @@index([role])
   @@index([status])
@@ -276,6 +277,7 @@ model Topic {
   questionImports QuestionImport[]
   questionGenerationBatches QuestionGenerationBatch[]
   learningDocuments LearningDocument[]
+  knowledgePlans KnowledgePlan[]
 
   @@index([created_by])
   @@map("topics")
@@ -299,6 +301,7 @@ model Chapter {
   questionImportItems    QuestionImportItem[] @relation("QuestionImportItemChapter")
   questionGenerationBatches QuestionGenerationBatch[]
   learningDocuments LearningDocument[]
+  mappedGenerationItems QuestionGenerationItem[] @relation("GenerationMappedChapter")
 
   @@index([topic_id, order])
   @@index([parent_id])
@@ -587,7 +590,9 @@ model QuestionGenerationBatch {
   updated_at       DateTime                      @updatedAt
   created_by       String                        @db.Uuid
   topic_id         String                        @db.Uuid
-  chapter_id       String                        @db.Uuid
+  chapter_id       String?                       @db.Uuid
+  plan_id          String?                       @db.Uuid
+  plan_snapshot    Json?
   contract_version String                        @default("text-generation.v1")
   idempotency_key  String                        @db.VarChar(128)
   request_hash     String                        @db.Char(64)
@@ -619,7 +624,8 @@ model QuestionGenerationBatch {
   finished_at      DateTime?
   creator          User                          @relation(fields: [created_by], references: [id], onDelete: Cascade)
   topic            Topic                         @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  chapter          Chapter                       @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  chapter          Chapter?                      @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  plan             KnowledgePlan?                @relation(fields: [plan_id], references: [id], onDelete: NoAction)
   items            QuestionGenerationItem[]
   attempts         QuestionGenerationAttempt[]
   outbox           QuestionGenerationOutbox?
@@ -630,6 +636,7 @@ model QuestionGenerationBatch {
   @@index([status, lease_expires_at])
   @@index([source_version_id])
   @@index([source_index_id])
+  @@index([plan_id])
   @@map("question_generation_batches")
 }
 
@@ -639,6 +646,9 @@ model QuestionGenerationItem {
   updated_at    DateTime                     @updatedAt
   batch_id      String                       @db.Uuid
   source_index  Int
+  plan_item_id  String?
+  target_chapter_id String? @db.Uuid
+  mappedChapter Chapter? @relation("GenerationMappedChapter", fields: [target_chapter_id], references: [id], onDelete: SetNull)
   revision      Int                          @default(1)
   original_data Json
   provenance    Json?
@@ -657,6 +667,7 @@ model QuestionGenerationItem {
 
   @@unique([batch_id, source_index])
   @@index([batch_id, status])
+  @@index([target_chapter_id])
   @@map("question_generation_items")
 }
 
@@ -729,13 +740,13 @@ model LearningDocument {
   updated_at   DateTime @updatedAt
   created_by   String   @db.Uuid
   topic_id     String   @db.Uuid
-  chapter_id   String   @db.Uuid
+  chapter_id   String?  @db.Uuid
   title        String   @db.VarChar(200)
   is_deleted   Boolean  @default(false)
   next_version Int      @default(2)
   creator      User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
   topic        Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  chapter      Chapter  @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  chapter      Chapter? @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
   versions     LearningDocumentVersion[]
 
   @@index([created_by, created_at(sort: Desc)])
@@ -779,7 +790,43 @@ model LearningDocumentVersion {
   @@index([status, lease_expires_at])
   @@map("learning_document_versions")
   generationBatches QuestionGenerationBatch[]
+  knowledgePlans KnowledgePlan[]
 
+}
+
+/// A lecturer-reviewed content tree and topic × cognitive-level matrix.
+/// Approval freezes a plan; only approved question commit may create bank chapters.
+model KnowledgePlan {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  created_by        String   @db.Uuid
+  topic_id          String   @db.Uuid
+  source_version_id String   @db.Uuid
+  source_index_id   String?  @db.Uuid
+  source_profile_id String?  @db.Char(64)
+  source_sha256     String?  @db.Char(64)
+  status            String   @default("WAITING_SOURCE")
+  revision          Int      @default(1)
+  question_configs  Json
+  idempotency_key   String
+  request_hash      String @db.Char(64)
+  content_map       Json?
+  matrix            Json?
+  execution_id      String?  @db.Uuid
+  lease_expires_at  DateTime?
+  next_prepare_at   DateTime @default(now())
+  error_code        String?
+  creator           User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic             Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  sourceVersion     LearningDocumentVersion @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
+  batches           QuestionGenerationBatch[]
+
+  @@index([created_by, created_at(sort: Desc)])
+  @@unique([created_by, idempotency_key])
+  @@index([status, next_prepare_at])
+  @@index([source_version_id])
+  @@map("knowledge_plans")
 }
 
 enum LearningDocumentIndexStatus {

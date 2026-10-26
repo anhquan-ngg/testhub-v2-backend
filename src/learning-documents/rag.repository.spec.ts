@@ -22,7 +22,7 @@ describe('RAG outbox scope and retry scheduling', () => {
           document: {
             is_deleted: false,
             creator: { role: 'LECTURER', status: 'ACTIVE' },
-            chapter: { is_deleted: false },
+            OR: [{ chapter_id: null }, { chapter: { is_deleted: false } }],
             topic: { is_deleted: false },
           },
         },

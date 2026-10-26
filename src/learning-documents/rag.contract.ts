@@ -33,7 +33,7 @@ export type RagCommand = {
   scope: {
     owner_id: string;
     topic_id: string;
-    chapter_id: string;
+    chapter_id: string | null;
     document_id: string;
     version_id: string;
   };

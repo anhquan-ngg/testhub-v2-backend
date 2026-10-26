@@ -22,14 +22,21 @@ export const provenanceSchema = z
     profile_id: z.string().regex(/^[a-f0-9]{64}$/),
     quality_status: z.literal('UNASSESSED'),
     citations: z.array(sourceCitationSchema).min(1).max(3),
+    plan_item_id: z.string().max(100).optional(),
+    knowledge_title: z.string().max(200).optional(),
+    objective: z.string().max(400).optional(),
   })
   .strict();
 export type QuestionProvenance = z.infer<typeof provenanceSchema>;
 const groundedQuestionSchema = generatedQuestionBaseSchema
-  .extend({ citations: z.array(sourceCitationSchema).min(1).max(3) })
+  .extend({
+    plan_item_id: z.string().max(100).nullable().optional(),
+    citations: z.array(sourceCitationSchema).min(1).max(3),
+  })
   .strict()
   .refine((value) => {
-    const { citations, ...question } = value;
+    const { citations, plan_item_id, ...question } = value;
+    void plan_item_id;
     return (
       generatedQuestionSchema.safeParse(question).success &&
       new Set(citations.map((c) => c.chunk.chunk_id)).size === citations.length

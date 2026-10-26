@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -12,6 +13,7 @@ import { AI_SERVICE_OPTIONS } from './ai-service.config';
 import type { AiServiceOptions } from './ai-service.config';
 import { GenerationBatchRepository } from './generation-batch.repository';
 import { GenerationExecutionService } from './generation-execution.service';
+import { KnowledgePlanService } from './knowledge-plan.service';
 import {
   AI_DISPATCH_RECHECK_MS,
   AI_GENERATION_JOB,
@@ -33,6 +35,7 @@ export class GenerationDispatcher implements OnModuleInit, OnModuleDestroy {
     private readonly execution: GenerationExecutionService,
     @InjectQueue(AI_GENERATION_QUEUE) private readonly queue: Queue,
     @Inject(AI_SERVICE_OPTIONS) private readonly options: AiServiceOptions,
+    @Optional() private readonly plans?: KnowledgePlanService,
   ) {
     // Observe initialization once. Never let an unavailable initial Redis
     // connection block lease recovery or accumulate pending dispatch commands.
@@ -75,6 +78,7 @@ export class GenerationDispatcher implements OnModuleInit, OnModuleDestroy {
   }
 
   private async reconcile(): Promise<void> {
+    await this.plans?.prepareDue();
     for (const stale of await this.repository.staleExecutions()) {
       try {
         await this.execution.recover(stale.id);

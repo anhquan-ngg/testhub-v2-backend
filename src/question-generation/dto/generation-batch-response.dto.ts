@@ -33,7 +33,9 @@ export class GenerationBatchResponseDto {
     | null;
   @ApiProperty({ format: 'uuid' }) id: string;
   @ApiProperty({ format: 'uuid' }) topic_id: string;
-  @ApiProperty({ format: 'uuid' }) chapter_id: string;
+  @ApiProperty({ format: 'uuid', nullable: true }) chapter_id: string | null;
+  @ApiProperty({ type: String, nullable: true }) plan_id: string | null;
+  @ApiProperty({ type: Object, nullable: true }) plan_snapshot: object | null;
   @ApiProperty({ enum: QuestionGenerationBatchStatus })
   status: QuestionGenerationBatchStatus;
   @ApiProperty({
@@ -82,6 +84,10 @@ export class GeneratedQuestionDto {
 }
 
 export class GenerationItemResponseDto {
+  @ApiProperty({ type: String, nullable: true }) plan_item_id: string | null;
+  @ApiProperty({ type: String, nullable: true }) target_chapter_id:
+    | string
+    | null;
   @ApiProperty({
     type: Object,
     nullable: true,

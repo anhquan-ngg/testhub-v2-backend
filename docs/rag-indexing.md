@@ -121,6 +121,7 @@ testhub_ai**, enter its password and apply AI-owned DDL:
 
 ```powershell
 psql -h 127.0.0.1 -p 5432 -U testhub_ai -d testhub -W -v ON_ERROR_STOP=1 -f ../testhub-ai-service/migrations/001_rag.sql
+psql -h 127.0.0.1 -p 5432 -U testhub_ai -d testhub -W -v ON_ERROR_STOP=1 -f ../testhub-ai-service/migrations/002_optional_document_chapter.sql
 ```
 
 Apply additive Prisma migrations yourself against the confirmed **local** backend
@@ -174,7 +175,12 @@ npm run start:document-worker
 npm run dev
 ```
 
-`GET http://127.0.0.1:8000/ready` verifies rag migration v1/connectivity; 503 means
+Migration 002 allows `rag.document_indexes.chapter_id` to be NULL for documents
+owned by a topic before chapters are created at question commit. Without it,
+`/internal/rag/prepare` fails with NotNullViolation. Do not change migration 001.
+
+`GET http://127.0.0.1:8000/ready` verifies migrations v1/v2, connectivity and the
+nullable chapter column; 503 means
 storage/schema unavailable. `/health` is liveness only. Neither calls Google.
 Windows retains the subprocess-capable Proactor loop; async psycopg runs in an
 owned selector-loop thread. Do not force the main app to SelectorEventLoop:

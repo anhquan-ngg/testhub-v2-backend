@@ -98,7 +98,7 @@ export class GenerationExecutionService {
           { id: batch.creator.id, role: batch.creator.role },
           {
             topic_id: batch.topic_id,
-            chapter_id: batch.chapter_id,
+            chapter_id: batch.chapter_id ?? '',
             source: { mode: 'text', text: batch.source_text },
             question_configs: questionConfigs,
             language: batch.language,
