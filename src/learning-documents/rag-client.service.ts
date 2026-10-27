@@ -1,4 +1,8 @@
 import { groundedResponseSchema } from '../question-generation/grounded-generation.contract';
+import {
+  outlineSchema,
+  FrozenPlan,
+} from '../question-generation/knowledge-plan.contract';
 import { matchesQuestionConfigs } from '../question-generation/question-generation.contract';
 import type { QuestionConfig } from '../question-generation/question-generation.contract';
 import { Injectable } from '@nestjs/common';
@@ -34,7 +38,12 @@ export class RagClient {
   ): Promise<unknown> {
     if (!this.enabled || !this.options.enabled)
       throw new DocumentProcessingError('RAG_DISABLED');
-    const maximumBytes = path === 'generate' ? 1_048_576 : 256_000;
+    const maximumBytes =
+      path === 'outline'
+        ? 4_194_304
+        : path === 'generate'
+          ? 1_048_576
+          : 256_000;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
@@ -137,6 +146,20 @@ export class RagClient {
     if (!v.success) throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
     return v.data;
   }
+  /** Read a source-derived content map over all authorized chunks, without a model call. */
+  async outline(body: {
+    owner_id: string;
+    index_id: string;
+    profile_id: string;
+    title: string;
+  }) {
+    const parsed = outlineSchema.safeParse(
+      await this.request('outline', body, 20_000),
+    );
+    if (!parsed.success || parsed.data.index_id !== body.index_id)
+      throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
+    return parsed.data;
+  }
   /** Persist a deterministic chunk plan for the pinned source. */
   async prepare(
     command: RagCommand,
@@ -193,6 +216,7 @@ export class RagClient {
     query: string;
     top_k: number;
     question_configs: QuestionConfig[];
+    plan_items?: Omit<FrozenPlan['items'][number], 'node_id'>[];
   }) {
     const parsed = groundedResponseSchema.safeParse(
       await this.request('generate', body, 85_000),

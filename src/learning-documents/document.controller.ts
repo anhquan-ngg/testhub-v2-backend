@@ -99,11 +99,11 @@ export class DocumentController {
     schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['title', 'topic_id', 'chapter_id', 'upload'],
+      required: ['title', 'topic_id', 'upload'],
       properties: {
         title: { type: 'string', maxLength: 200 },
         topic_id: { type: 'string', format: 'uuid' },
-        chapter_id: { type: 'string', format: 'uuid' },
+        chapter_id: { type: 'string', format: 'uuid', nullable: true },
         upload: uploadBody,
       },
     },

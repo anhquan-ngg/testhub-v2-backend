@@ -13,7 +13,7 @@ function boundedText(minimum: number, maximum: number) {
 }
 
 export const MAX_GENERATION_QUESTIONS = 20;
-export const MAX_GENERATION_CONFIGS = 10;
+export const MAX_GENERATION_CONFIGS = 20;
 export const GENERATION_QUESTION_TYPES = [
   QuestionType.SINGLE_CHOICE,
   QuestionType.MULTIPLE_CHOICE,
@@ -128,7 +128,8 @@ const textSourceSchema = z
 const commandBaseSchema = z
   .object({
     topic_id: z.string().uuid(),
-    chapter_id: z.string().uuid(),
+    chapter_id: z.string().uuid().nullable(),
+    plan_id: z.string().uuid().optional(),
     source: z.discriminatedUnion('mode', [
       textSourceSchema,
       z
@@ -182,11 +183,26 @@ function normalizeBlueprint<T extends BlueprintInput>(
 }
 
 /** Frozen command shared by the authenticated batch API and worker. */
-export const generationCommandSchema =
-  commandBaseSchema.transform(normalizeBlueprint);
+export const generationCommandSchema = commandBaseSchema
+  .superRefine((value, ctx) => {
+    if (
+      (!value.plan_id && !value.chapter_id) ||
+      (value.plan_id &&
+        (value.source.mode !== 'document' || value.chapter_id !== null))
+    )
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A planned document or an explicit legacy chapter is required',
+      });
+  })
+  .transform(normalizeBlueprint);
 
 export const textGenerationCommandSchema = commandBaseSchema
-  .extend({ source: textSourceSchema })
+  .extend({
+    source: textSourceSchema,
+    chapter_id: z.string().uuid(),
+    plan_id: z.never().optional(),
+  })
   .transform(normalizeBlueprint);
 export type GenerationCommand = z.infer<typeof generationCommandSchema>;
 export type TextGenerationCommand = z.infer<typeof textGenerationCommandSchema>;

@@ -1,3 +1,8 @@
+import {
+  FrozenPlan,
+  frozenPlanSchema,
+  expandPlanItems,
+} from './knowledge-plan.contract';
 import type { QuestionProvenance } from './grounded-generation.contract';
 import { ConflictException, Injectable } from '@nestjs/common';
 import {
@@ -23,6 +28,8 @@ const publicBatchSelect = {
   id: true,
   topic_id: true,
   chapter_id: true,
+  plan_id: true,
+  plan_snapshot: true,
   status: true,
   question_type: true,
   question_format: true,
@@ -59,17 +66,26 @@ export class GenerationBatchRepository {
               created_by: ownerId,
               is_deleted: false,
               topic: { created_by: ownerId, is_deleted: false },
-              chapter: { is_deleted: false },
+              OR: [{ chapter_id: null }, { chapter: { is_deleted: false } }],
             },
           },
         },
       ],
       creator: { role: UserRole.LECTURER, status: UserStatus.ACTIVE },
       topic: { created_by: ownerId, is_deleted: false },
-      chapter: {
-        is_deleted: false,
-        topic: { created_by: ownerId, is_deleted: false },
-      },
+      AND: [
+        {
+          OR: [
+            {
+              chapter: {
+                is_deleted: false,
+                topic: { created_by: ownerId, is_deleted: false },
+              },
+            },
+            { chapter_id: null, plan_id: { not: null } },
+          ],
+        },
+      ],
     };
   }
 
@@ -79,19 +95,29 @@ export class GenerationBatchRepository {
     key: string;
     hash: string;
     command: GenerationCommand;
+    plan?: FrozenPlan;
   }) {
-    const { ownerId, key, hash, command } = input;
+    const { ownerId, key, hash, command, plan } = input;
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const target = await tx.chapter.findFirst({
-          where: {
-            id: command.chapter_id,
-            topic_id: command.topic_id,
-            is_deleted: false,
-            topic: { created_by: ownerId, is_deleted: false },
-          },
-          select: { id: true },
-        });
+        const target = command.chapter_id
+          ? await tx.chapter.findFirst({
+              where: {
+                id: command.chapter_id,
+                topic_id: command.topic_id,
+                is_deleted: false,
+                topic: { created_by: ownerId, is_deleted: false },
+              },
+              select: { id: true },
+            })
+          : await tx.topic.findFirst({
+              where: {
+                id: command.topic_id,
+                created_by: ownerId,
+                is_deleted: false,
+              },
+              select: { id: true },
+            });
         const actor = await tx.user.findFirst({
           where: {
             id: ownerId,
@@ -104,6 +130,28 @@ export class GenerationBatchRepository {
           throw new ConflictException(
             'Generation target is no longer available',
           );
+        const approvedPlan = plan
+          ? await tx.knowledgePlan.findFirst({
+              where: {
+                id: plan.plan_id,
+                created_by: ownerId,
+                topic_id: command.topic_id,
+                status: 'APPROVED',
+                revision: plan.revision,
+              },
+            })
+          : null;
+        if (
+          plan &&
+          (!approvedPlan ||
+            approvedPlan.source_version_id !==
+              (command.source.mode === 'document'
+                ? command.source.version_id
+                : null) ||
+            !approvedPlan.source_index_id ||
+            !approvedPlan.source_profile_id)
+        )
+          throw new ConflictException('Plan is no longer available');
         if (command.source.mode === 'document') {
           const version = await tx.learningDocumentVersion.findFirst({
             where: {
@@ -113,7 +161,7 @@ export class GenerationBatchRepository {
                 created_by: ownerId,
                 is_deleted: false,
                 topic_id: command.topic_id,
-                chapter_id: command.chapter_id,
+                ...(!plan ? { chapter_id: command.chapter_id } : {}),
               },
             },
           });
@@ -128,6 +176,7 @@ export class GenerationBatchRepository {
             created_by: ownerId,
             topic_id: command.topic_id,
             chapter_id: command.chapter_id,
+            ...(plan ? { plan_id: plan.plan_id, plan_snapshot: plan } : {}),
             idempotency_key: key,
             request_hash: hash,
             source_text:
@@ -142,7 +191,14 @@ export class GenerationBatchRepository {
                   source_version_id: command.source.version_id,
                   source_query: command.source.query,
                   status: BatchStatus.WAITING_SOURCE,
-                  preparation_stage: 'EXTRACTING',
+                  preparation_stage: plan ? 'READY' : 'EXTRACTING',
+                  ...(approvedPlan
+                    ? {
+                        status: BatchStatus.QUEUED,
+                        source_index_id: approvedPlan.source_index_id,
+                        source_profile_id: approvedPlan.source_profile_id,
+                      }
+                    : {}),
                 }
               : {}),
             // Legacy columns summarize the first row for older readers.
@@ -184,7 +240,8 @@ export class GenerationBatchRepository {
       where: { id, ...this.ownerScope(ownerId) },
       select: { ...publicBatchSelect, chapter: { select: { topic_id: true } } },
     });
-    if (!batch || batch.chapter.topic_id !== batch.topic_id) return null;
+    if (!batch || (batch.chapter && batch.chapter.topic_id !== batch.topic_id))
+      return null;
     const { chapter, ...safe } = batch;
     void chapter;
     return safe;
@@ -232,6 +289,8 @@ export class GenerationBatchRepository {
             status: true,
             data: true,
             provenance: true,
+            plan_item_id: true,
+            target_chapter_id: true,
             errors: true,
             warnings: true,
             reviewed_by: true,
@@ -319,6 +378,8 @@ export class GenerationBatchRepository {
         select: {
           topic_id: true,
           source_mode: true,
+          plan_snapshot: true,
+          chapter_id: true,
           source_version_id: true,
           source_index_id: true,
           source_profile_id: true,
@@ -357,7 +418,9 @@ export class GenerationBatchRepository {
                 },
               }
             : {}),
-          chapter: { is_deleted: false, topic_id: batch.topic_id },
+          ...(batch.chapter_id
+            ? { chapter: { is_deleted: false, topic_id: batch.topic_id } }
+            : {}),
           status: BatchStatus.GENERATING,
           execution_id: executionId,
         },
@@ -373,10 +436,20 @@ export class GenerationBatchRepository {
         throw new ConflictException(
           'Generation execution is no longer active or authorized',
         );
+      const slots = batch.plan_snapshot
+        ? expandPlanItems(frozenPlanSchema.parse(batch.plan_snapshot))
+        : undefined;
+      if (
+        slots &&
+        (slots.length !== questions.length ||
+          provenance?.some((p, i) => p.plan_item_id !== slots[i].id))
+      )
+        throw new ConflictException('Plan item mismatch');
       await tx.questionGenerationItem.createMany({
         data: questions.map((question, index) => ({
           batch_id: id,
           source_index: index + 1,
+          ...(slots ? { plan_item_id: slots[index].id } : {}),
           original_data: question,
           data: question,
           ...(provenance ? { provenance: provenance[index] } : {}),

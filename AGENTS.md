@@ -1,5 +1,24 @@
 # AGENTS.md — testhub-v2-backend
 
+## Background dev processes (2026-10-25)
+
+- npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.
+- Use dev:* wrappers, not global PM2. State/logs are under ignored .tmp/pm2-dev; custom IPC sockets also isolate Windows instances. Production ecosystem.config.cjs stays separate.
+- Restart apps only on a completed zero-error Nest build. Dev config disables output deletion and enables noEmitOnError; do not run another compiler against dist concurrently.
+- dev:logs prefixes every stdout/stderr line as [process-name] - message. Closing logs leaves apps running. Graceful IPC shutdown forwards to Nest hooks and drains workers.
+- npm run test:dev-runner uses real PM2/Nest with synthetic apps in an isolated temp project, never user DB/Redis/AI.
+
+
+## Knowledge plans (2026-10-25)
+
+- Lecturer generation starts with a subject-owned document, not a bank chapter.
+- KnowledgePlan stores full-source outline, editable tree/objectives/page refs and topic x cognitive counts. Confirmed revisions freeze into batch snapshots.
+- The AI worker prepares plans; retrieval is per cognitive cell. Only explicit approved question commit may resolve/create required chapter branches.
+- Match normalized sibling names conservatively, reject ambiguous matches; batch then subject locks serialize planned commits. No fixed tree-depth limit.
+- See docs/knowledge-plans.md for API, new migrations, deployment order, limits and tests. Historical migrations must remain unchanged.
+- Question config row limit is now 20 (total questions still <=20). CONTINUITY.md is local and ignored/untracked.
+
+
 ## Question configs for AI generation (2026-10-23)
 
 - Batch commands accept ordered question_configs (1-10 rows, total <=20,
@@ -187,16 +206,18 @@ src/<feature>/
 
 - **Base URL:** frontend gọi trực tiếp backend qua `NEXT_PUBLIC_API_URL` (mặc định `http://localhost:3001`), không có tiền tố `/api` hay version. Không có package contract dùng chung; endpoint được khai báo thủ công ở `../testhub-v2/src/constants/endpoints.ts`. **Khi đổi/xóa route, kiểm tra và báo lại cho phía frontend.**
 - **CORS:** `FRONTEND_URL` (có thể nhiều giá trị, phân tách bằng dấu phẩy), `credentials: true`. Cũng được dùng làm origin cho các gateway Socket.IO và đích redirect sau OAuth.
-- **Xác thực bằng cookie httpOnly** (`src/auth/auth.controller.ts`):
+- **Xác thực bằng cookie httpOnly và AuthSession** (`src/auth/auth.controller.ts`, cập nhật 2026-10-25):
   - `access_token`: 15 phút, ký bằng `JWT_ACCESS_SECRET`, payload `{ sub, email, role }`.
-  - `refresh_token`: 7 ngày, ký bằng `JWT_REFRESH_SECRET`, `path: '/auth/refresh'`, hash lưu trong `Account.refresh_token_hash`.
-  - `secure`/`sameSite` phụ thuộc `NODE_ENV === 'production'`.
+  - `refresh_token`: mặc định 7 ngày tuyệt đối, ký bằng `JWT_REFRESH_SECRET`, `path: '/auth/refresh'`, hash lưu theo AuthSession. Access/refresh dùng sid và token_use riêng; TTL cookie đồng bộ JWT bằng sessionDuration. Account token columns giữ để tương thích, code mới không sử dụng.
+  - `secure` phụ thuộc `NODE_ENV === 'production'`, SameSite=Lax. POST /auth/* bắt buộc Origin thuộc FRONTEND_URL. OAuth callback GET giữ nguyên.
+  - STUDENT có một student_slot duy nhất. Login mới tạo PENDING, không thu hồi phiên đang thi. Xác nhận khi có IN_PROGRESS cần giảng viên phụ trách tất cả bài đang làm hoặc ADMIN duyệt; LECTURER/ADMIN được nhiều phiên. Logout chỉ thu hồi sid hiện tại. Confirmation replay trong 10 phút trả cùng phiên, không hồi sinh phiên đã thu hồi.
+  - AuthSessionService khóa user khi chuyển phiên và thao tác bài thi; StudentSessionInterceptor áp cho submission/exam-runtime. Dùng PrismaService.current/inTransaction trong luồng này, queue/realtime qua afterCommit. Không dùng client gốc để thoát transaction đang khóa.
   - Frontend (`../testhub-v2/src/proxy.ts`) tự verify `access_token` bằng `NEXT_JWT_ACCESS_SECRET` để phân quyền route ⇒ giá trị đó phải trùng `JWT_ACCESS_SECRET`. Đổi thuật toán/payload JWT sẽ làm hỏng frontend.
-  - Frontend tự gọi `POST /auth/refresh` khi gặp 401 (`../testhub-v2/src/lib/api-client.ts`).
+  - Frontend tự gọi `POST /auth/refresh` khi gặp 401, lỗi tạm thời không logout. Proxy thiếu/hết hạn access chuyển qua trang recovery để trình duyệt refresh. Cookie phải cùng host frontend; khác host cần reverse proxy/BFF. Xem docs/auth-sessions.md về migration, kiểm tra và đăng nhập lại token cũ.
   - OAuth: `GET /auth/google`, `GET /auth/outlook` (+ `/callback`), redirect về `FRONTEND_URL`.
 - **Socket.IO:**
-  - Namespace `/notifications` (`src/notification/notification.gateway.ts`): nhận `userId`, `userRole` từ `handshake.query` (không verify JWT); room `user:{userId}` và `room:admin`. Sự kiện frontend đang dùng: `notification:unread`, `notification:new`, `notification:unread_count`, `notification:mark_read`, `notification:mark_all_read`, `dashboard:update`, `exam:registration_approved`, `exam:student_added`, `exam:registration_requested`.
-  - Namespace `/exam-runtime` (`src/exam-runtime/exam-runtime.gateway.ts`): yêu cầu token qua `handshake.auth.token` hoặc header `Authorization`; frontend hiện **không** kết nối namespace này.
+  - Namespace `/notifications` (`src/notification/notification.gateway.ts`): xác thực JWT cookie và AuthSession, không tin danh tính query; room `user:{userId}` và `room:admin`. Thu hồi được kiểm tra định kỳ 5 giây. Sự kiện frontend đang dùng: `notification:unread`, `notification:new`, `notification:unread_count`, `notification:mark_read`, `notification:mark_all_read`, `dashboard:update`, `exam:registration_approved`, `exam:student_added`, `exam:registration_requested`.
+  - Namespace `/exam-runtime` (`src/exam-runtime/exam-runtime.gateway.ts`): xác thực access JWT qua `handshake.auth.token` hoặc cookie `access_token`, kiểm tra `AuthSession` và kiểm tra thu hồi phiên định kỳ mỗi 5 giây; frontend hiện **không** kết nối namespace này.
 - **SSE:** `GET /exam-runtime/exams/:examId/events` (sinh viên, chỉ nhận `STUDENT_EVENT_TYPES`) và `GET /exam-runtime/monitor/exams/:examId/events` (giám sát). Frontend dùng `EventSource` với `withCredentials`. Giữ nguyên whitelist loại sự kiện để không lộ dữ liệu của sinh viên khác.
 - **Upload file:** `POST /files/upload-url` → client PUT trực tiếp lên presigned URL → `POST /files/:id/confirm`. Các route `/s3/*` cũ vẫn tồn tại và frontend vẫn dùng `GET /s3/view-file`.
 
@@ -204,7 +225,7 @@ src/<feature>/
 
 Không có `.env.example` (README nhắc tới nhưng file không tồn tại). Biến được đọc trong code:
 
-`PORT`, `NODE_ENV`, `FRONTEND_URL`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES`, `JWT_REFRESH_EXPIRES`, `JWT_SECRET`, `JWT_EXPIRATION` (cấu hình mặc định của `JwtModule` trong `src/auth/auth.module.ts`), `ENCRYPTION_SECRET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME` (bắt buộc, `getOrThrow`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_CALLBACK_URL`.
+`PORT`, `NODE_ENV`, `FRONTEND_URL`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `JWT_ACCESS_EXPIRES`, `JWT_REFRESH_EXPIRES`, `AUTH_REFRESH_GRACE_SECONDS` (mặc định 10, giới hạn 1..30), `ENCRYPTION_SECRET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET_NAME` (bắt buộc, `getOrThrow`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_CALLBACK_URL`. JWT_SECRET/JWT_EXPIRATION cũ không còn được đọc trong luồng xác thực.
 
 Luồng thử nghiệm Gemini trực tiếp đã gỡ; Gemini thuộc `../testhub-ai-service`. Module generation có batch/staging, worker FastAPI, review/revision và commit đã duyệt. Xem `docs/ai-question-generation.md` và `.env.ai.example`.
 

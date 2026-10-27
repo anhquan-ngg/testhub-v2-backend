@@ -128,7 +128,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      const upcomingExams = await this.prisma.exam.findMany({
+      const upcomingExams = await this.prisma.current.exam.findMany({
         where: {
           is_deleted: false,
           exam_end_time: { gt: new Date() },
@@ -225,10 +225,10 @@ export class ExamRuntimeService implements OnModuleInit {
     }
     const now = new Date();
     const autoSubmitAt = retryGrant
-      // exam_end_time is no longer a meaningful cap once a retry has been
-      // explicitly granted after it — the student gets one full fresh
-      // duration from whenever they actually start.
-      ? new Date(now.getTime() + exam.duration * 60 * 1000)
+      ? // exam_end_time is no longer a meaningful cap once a retry has been
+        // explicitly granted after it — the student gets one full fresh
+        // duration from whenever they actually start.
+        new Date(now.getTime() + exam.duration * 60 * 1000)
       : new Date(
           Math.min(
             now.getTime() + exam.duration * 60 * 1000,
@@ -237,7 +237,7 @@ export class ExamRuntimeService implements OnModuleInit {
         );
 
     try {
-      const submission = await this.prisma.$transaction(async (tx) => {
+      const submission = await this.prisma.inTransaction(async (tx) => {
         const createdSubmission = await tx.submission.create({
           data: {
             exam_id: exam.id,
@@ -274,9 +274,13 @@ export class ExamRuntimeService implements OnModuleInit {
         return createdSubmission;
       });
 
-      await this.queue.scheduleAutoSubmit(submission.id, autoSubmitAt);
-      await this.emitActiveCount(exam.id);
-      this.monitor.markDirty(exam.id, submission.id);
+      await this.prisma.afterCommit(() =>
+        this.queue.scheduleAutoSubmit(submission.id, autoSubmitAt),
+      );
+      await this.prisma.afterCommit(() => this.emitActiveCount(exam.id));
+      await this.prisma.afterCommit(() =>
+        this.monitor.markDirty(exam.id, submission.id),
+      );
 
       return { data: await this.formatSubmissionExam(submission.id) };
     } catch (error: any) {
@@ -296,7 +300,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async heartbeat(submissionId: string, studentId: string) {
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         id: submissionId,
         student_id: studentId,
@@ -323,9 +327,13 @@ export class ExamRuntimeService implements OnModuleInit {
     const wasInactive = !submission.session?.is_active;
     const session = await this.touchSession(submission.id);
 
-    this.monitor.markDirty(submission.exam_id, submissionId);
+    await this.prisma.afterCommit(() =>
+      this.monitor.markDirty(submission.exam_id, submissionId),
+    );
     if (wasInactive) {
-      await this.emitActiveCount(submission.exam_id);
+      await this.prisma.afterCommit(() =>
+        this.emitActiveCount(submission.exam_id),
+      );
     }
 
     return {
@@ -355,10 +363,12 @@ export class ExamRuntimeService implements OnModuleInit {
     },
   ): Promise<{ accepted: boolean; reason?: string }> {
     if (!CLIENT_REPORTABLE_VIOLATION_TYPES.includes(input.type)) {
-      throw new BadRequestException('This violation type cannot be self-reported');
+      throw new BadRequestException(
+        'This violation type cannot be self-reported',
+      );
     }
 
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         id: submissionId,
         student_id: studentId,
@@ -387,7 +397,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
     const debounceMs = VIOLATION_DEBOUNCE_MS[input.type];
     if (debounceMs > 0) {
-      const recent = await this.prisma.examViolation.findFirst({
+      const recent = await this.prisma.current.examViolation.findFirst({
         where: {
           submission_id: submissionId,
           type: input.type,
@@ -400,7 +410,7 @@ export class ExamRuntimeService implements OnModuleInit {
       }
     }
 
-    const existingCount = await this.prisma.examViolation.count({
+    const existingCount = await this.prisma.current.examViolation.count({
       where: { submission_id: submissionId },
     });
     if (existingCount >= VIOLATION_MAX_PER_SUBMISSION) {
@@ -428,7 +438,7 @@ export class ExamRuntimeService implements OnModuleInit {
       clientTime?: Date;
     },
   ) {
-    const violation = await this.prisma.examViolation.create({
+    const violation = await this.prisma.current.examViolation.create({
       data: {
         exam_id: examId,
         submission_id: submissionId,
@@ -440,19 +450,23 @@ export class ExamRuntimeService implements OnModuleInit {
       },
     });
 
-    const violationCount = await this.prisma.examViolation.count({
+    const violationCount = await this.prisma.current.examViolation.count({
       where: { submission_id: submissionId },
     });
 
-    this.monitor.markDirty(examId, submissionId);
-    this.events.emit(examId, EXAM_RUNTIME_EVENTS.MONITOR_VIOLATION, {
-      submissionId,
-      studentId,
-      type: violation.type,
-      source: violation.source,
-      occurredAt: violation.occurred_at.toISOString(),
-      violationCount,
-    });
+    await this.prisma.afterCommit(() =>
+      this.monitor.markDirty(examId, submissionId),
+    );
+    await this.prisma.afterCommit(() =>
+      this.events.emit(examId, EXAM_RUNTIME_EVENTS.MONITOR_VIOLATION, {
+        submissionId,
+        studentId,
+        type: violation.type,
+        source: violation.source,
+        occurredAt: violation.occurred_at.toISOString(),
+        violationCount,
+      }),
+    );
 
     return violation;
   }
@@ -474,7 +488,7 @@ export class ExamRuntimeService implements OnModuleInit {
     examId: string,
     user: { id: string; role: UserRole },
   ) {
-    const exam = await this.prisma.exam.findFirst({
+    const exam = await this.prisma.current.exam.findFirst({
       where: { id: examId, is_deleted: false },
       select: { id: true, title: true, lecturer_id: true, practice: true },
     });
@@ -509,7 +523,7 @@ export class ExamRuntimeService implements OnModuleInit {
       return { data: existing };
     }
 
-    const grant = await this.prisma.examRetryGrant.create({
+    const grant = await this.prisma.current.examRetryGrant.create({
       data: { exam_id: examId, student_id: studentId, granted_by: user.id },
     });
 
@@ -559,7 +573,7 @@ export class ExamRuntimeService implements OnModuleInit {
       throw new BadRequestException('Practice exams cannot be extended');
     }
 
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         exam_id: examId,
         student_id: studentId,
@@ -579,13 +593,15 @@ export class ExamRuntimeService implements OnModuleInit {
     const base = submission.auto_submit_at ?? new Date();
     const newDeadline = new Date(base.getTime() + extraMinutes * 60 * 1000);
 
-    await this.prisma.submission.update({
+    await this.prisma.current.submission.update({
       where: { id: submission.id },
       data: { auto_submit_at: newDeadline },
     });
 
     await this.queue.scheduleAutoSubmit(submission.id, newDeadline);
-    this.monitor.markDirty(examId, submission.id);
+    await this.prisma.afterCommit(() =>
+      this.monitor.markDirty(examId, submission.id),
+    );
 
     return {
       data: {
@@ -599,7 +615,7 @@ export class ExamRuntimeService implements OnModuleInit {
     examId: string,
     user: { id: string; role: UserRole },
   ): Promise<MonitorRosterResponse> {
-    const exam = await this.prisma.exam.findFirst({
+    const exam = await this.prisma.current.exam.findFirst({
       where: { id: examId, is_deleted: false },
       select: {
         id: true,
@@ -626,7 +642,7 @@ export class ExamRuntimeService implements OnModuleInit {
     );
 
     const [registrations, submissions] = await Promise.all([
-      this.prisma.examRegistration.findMany({
+      this.prisma.current.examRegistration.findMany({
         where: {
           exam_id: examId,
           is_deleted: false,
@@ -638,7 +654,7 @@ export class ExamRuntimeService implements OnModuleInit {
         },
         orderBy: { student: { full_name: 'asc' } },
       }),
-      this.prisma.submission.findMany({
+      this.prisma.current.submission.findMany({
         where: { exam_id: examId, is_deleted: false },
         select: {
           id: true,
@@ -658,7 +674,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
     const [progress, violationCounts, latestViolations] = await Promise.all([
       submissionIds.length
-        ? this.prisma.$queryRaw<ProgressRow[]>`
+        ? this.prisma.current.$queryRaw<ProgressRow[]>`
             SELECT sq.submission_id,
                    COUNT(*)::int AS total,
                    COUNT(*) FILTER (
@@ -671,7 +687,7 @@ export class ExamRuntimeService implements OnModuleInit {
           `
         : Promise.resolve([] as ProgressRow[]),
       submissionIds.length
-        ? this.prisma.examViolation.groupBy({
+        ? this.prisma.current.examViolation.groupBy({
             by: ['submission_id'],
             where: { submission_id: { in: submissionIds } },
             _count: { _all: true },
@@ -680,7 +696,7 @@ export class ExamRuntimeService implements OnModuleInit {
             [] as Array<{ submission_id: string; _count: { _all: number } }>,
           ),
       submissionIds.length
-        ? this.prisma.examViolation.findMany({
+        ? this.prisma.current.examViolation.findMany({
             where: { submission_id: { in: submissionIds } },
             orderBy: { occurred_at: 'desc' },
             distinct: ['submission_id'],
@@ -739,9 +755,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
     const rows: MonitorRosterRow[] = [...studentIds].map((studentId) => {
       const student = studentInfoById.get(studentId)!;
-      const registered = registrations.some(
-        (r) => r.student_id === studentId,
-      );
+      const registered = registrations.some((r) => r.student_id === studentId);
       const latestSubmission = latestByStudent.get(studentId) ?? null;
       const violations = latestSubmission
         ? (violationCountBy.get(latestSubmission.id) ?? 0)
@@ -851,7 +865,7 @@ export class ExamRuntimeService implements OnModuleInit {
     startTime?: Date,
     studentId?: string,
   ) {
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         id: submissionId,
         is_deleted: false,
@@ -870,7 +884,7 @@ export class ExamRuntimeService implements OnModuleInit {
     }
 
     if (submission.status !== SubmissionStatus.COMPLETED) {
-      await this.prisma.submission.update({
+      await this.prisma.current.submission.update({
         where: { id: submissionId },
         data: {
           status: SubmissionStatus.COMPLETED,
@@ -882,20 +896,26 @@ export class ExamRuntimeService implements OnModuleInit {
       });
     }
 
-    await this.prisma.examSession.updateMany({
+    await this.prisma.current.examSession.updateMany({
       where: { submission_id: submissionId },
       data: { is_active: false, last_ping: endTime },
     });
 
-    await this.queue.enqueueGradeSubmission(submissionId);
-    await this.emitActiveCount(submission.exam_id);
-    this.monitor.markDirty(submission.exam_id, submissionId);
+    await this.prisma.afterCommit(() =>
+      this.queue.enqueueGradeSubmission(submissionId),
+    );
+    await this.prisma.afterCommit(() =>
+      this.emitActiveCount(submission.exam_id),
+    );
+    await this.prisma.afterCommit(() =>
+      this.monitor.markDirty(submission.exam_id, submissionId),
+    );
 
     return { data: { submission_id: submissionId } };
   }
 
   async autoSubmitSubmission(submissionId: string) {
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: {
         id: submissionId,
         status: SubmissionStatus.IN_PROGRESS,
@@ -912,7 +932,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async gradeSubmission(submissionId: string) {
-    const submission = await this.prisma.submission.findFirst({
+    const submission = await this.prisma.current.submission.findFirst({
       where: { id: submissionId, is_deleted: false },
       include: {
         exam: { select: { title: true } },
@@ -938,7 +958,7 @@ export class ExamRuntimeService implements OnModuleInit {
     const roundedScore = Math.round(totalScore * 100) / 100;
     const rating = this.getRating(roundedScore);
 
-    await this.prisma.submission.update({
+    await this.prisma.current.submission.update({
       where: { id: submissionId },
       data: {
         total_score: roundedScore,
@@ -964,7 +984,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async notifyExamStartingSoon(examId: string) {
-    const exam = await this.prisma.exam.findFirst({
+    const exam = await this.prisma.current.exam.findFirst({
       where: { id: examId, is_deleted: false },
       include: {
         registrations: {
@@ -1008,7 +1028,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
   async cleanupInactiveSessions() {
     const staleBefore = new Date(Date.now() - EXAM_SESSION_TIMEOUT_MS);
-    const sessions = await this.prisma.examSession.findMany({
+    const sessions = await this.prisma.current.examSession.findMany({
       where: {
         is_active: true,
         last_ping: { lt: staleBefore },
@@ -1027,7 +1047,7 @@ export class ExamRuntimeService implements OnModuleInit {
       // between the findMany above and this updateMany would otherwise get
       // deactivated here without the matching CONNECTION_LOST violation or
       // emitActiveCount below, since those only iterate `sessions`.
-      await this.prisma.examSession.updateMany({
+      await this.prisma.current.examSession.updateMany({
         where: {
           submission_id: { in: sessions.map((s) => s.submission_id) },
           is_active: true,
@@ -1068,7 +1088,7 @@ export class ExamRuntimeService implements OnModuleInit {
     // was ever lost (e.g. a Redis flush mid-exam), an IN_PROGRESS
     // submission whose exam has already ended would otherwise haunt the
     // roster as a permanently-OFFLINE ghost row forever.
-    const overdue = await this.prisma.submission.findMany({
+    const overdue = await this.prisma.current.submission.findMany({
       where: {
         status: SubmissionStatus.IN_PROGRESS,
         is_deleted: false,
@@ -1106,7 +1126,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async getActiveCount(examId: string) {
-    return this.prisma.examSession.count({
+    return this.prisma.current.examSession.count({
       where: {
         is_active: true,
         submission: {
@@ -1119,7 +1139,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   private async findExam(examId: string) {
-    const exam = await this.prisma.exam.findFirst({
+    const exam = await this.prisma.current.exam.findFirst({
       where: {
         id: examId,
         is_deleted: false,
@@ -1134,7 +1154,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   private async findInProgressSubmission(examId: string, studentId: string) {
-    return this.prisma.submission.findFirst({
+    return this.prisma.current.submission.findFirst({
       where: {
         exam_id: examId,
         student_id: studentId,
@@ -1154,7 +1174,7 @@ export class ExamRuntimeService implements OnModuleInit {
       return;
     }
 
-    const registration = await this.prisma.examRegistration.findFirst({
+    const registration = await this.prisma.current.examRegistration.findFirst({
       where: {
         exam_id: exam.id,
         student_id: studentId,
@@ -1183,7 +1203,7 @@ export class ExamRuntimeService implements OnModuleInit {
       return null;
     }
 
-    const priorCompleted = await this.prisma.submission.findFirst({
+    const priorCompleted = await this.prisma.current.submission.findFirst({
       where: {
         exam_id: exam.id,
         student_id: studentId,
@@ -1208,7 +1228,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   private async findUsableRetryGrant(examId: string, studentId: string) {
-    return this.prisma.examRetryGrant.findFirst({
+    return this.prisma.current.examRetryGrant.findFirst({
       where: { exam_id: examId, student_id: studentId, consumed_at: null },
       orderBy: { created_at: 'desc' },
     });
@@ -1252,7 +1272,7 @@ export class ExamRuntimeService implements OnModuleInit {
 
   private async touchSession(submissionId: string) {
     const now = new Date();
-    return this.prisma.examSession.upsert({
+    return this.prisma.current.examSession.upsert({
       where: { submission_id: submissionId },
       create: {
         submission_id: submissionId,
@@ -1268,7 +1288,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   private async formatSubmissionExam(submissionId: string) {
-    const submission = await this.prisma.submission.findUnique({
+    const submission = await this.prisma.current.submission.findUnique({
       where: { id: submissionId },
       include: {
         exam: true,
@@ -1315,10 +1335,11 @@ export class ExamRuntimeService implements OnModuleInit {
       is_public: exam.is_public,
       questions: submission.questions.map((item) => ({
         ...item.question,
-        files: (item.question as any).files?.map((qf: any) => ({
-          ...qf.file,
-          order: qf.order,
-        })) ?? [],
+        files:
+          (item.question as any).files?.map((qf: any) => ({
+            ...qf.file,
+            order: qf.order,
+          })) ?? [],
         submitted_answer: item.answer ?? null,
         submitted_options: item.options ?? null,
         answered: item.answer != null || item.options != null,
@@ -1347,7 +1368,7 @@ export class ExamRuntimeService implements OnModuleInit {
     let questions: ExamQuestionRow[] = [];
 
     if (examData.mode === ExamMode.MANUAL) {
-      const examQuestions = await this.prisma.examQuestions.findMany({
+      const examQuestions = await this.prisma.current.examQuestions.findMany({
         where: {
           exam_id: examData.id,
           is_deleted: false,
@@ -1376,13 +1397,14 @@ export class ExamRuntimeService implements OnModuleInit {
       });
       questions = examQuestions.map((eq) => ({
         ...(eq.question as any),
-        files: (eq.question as any).files?.map((qf: any) => ({
-          ...qf.file,
-          order: qf.order,
-        })) ?? [],
+        files:
+          (eq.question as any).files?.map((qf: any) => ({
+            ...qf.file,
+            order: qf.order,
+          })) ?? [],
       })) as ExamQuestionRow[];
     } else if (examData.mode === ExamMode.RANDOM_N) {
-      const questionIdsRows = await this.prisma.question.findMany({
+      const questionIdsRows = await this.prisma.current.question.findMany({
         where: {
           is_deleted: false,
           chapter: {
@@ -1411,7 +1433,7 @@ export class ExamRuntimeService implements OnModuleInit {
       const selectedIds = shuffled.slice(0, limit);
 
       if (selectedIds.length > 0) {
-        const questionRows = await this.prisma.question.findMany({
+        const questionRows = await this.prisma.current.question.findMany({
           where: {
             id: { in: selectedIds },
           },
@@ -1454,8 +1476,9 @@ export class ExamRuntimeService implements OnModuleInit {
         );
       }
       const byTypeResults = await Promise.all(
-        parsedDistribution.map((distribution) =>
-          this.prisma.$queryRaw<ExamQuestionRow[]>`
+        parsedDistribution.map(
+          (distribution) =>
+            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
             SELECT
               q.id,
               q.question_text,
@@ -1488,9 +1511,7 @@ export class ExamRuntimeService implements OnModuleInit {
       let parsedDistribution: ExamChapterDistributionItem[];
       try {
         parsedDistribution = examData.distribution
-          ? (JSON.parse(
-              examData.distribution,
-            ) as ExamChapterDistributionItem[])
+          ? (JSON.parse(examData.distribution) as ExamChapterDistributionItem[])
           : [];
       } catch {
         throw new BadRequestException(
@@ -1498,8 +1519,9 @@ export class ExamRuntimeService implements OnModuleInit {
         );
       }
       const byChapterResults = await Promise.all(
-        parsedDistribution.map((distribution) =>
-          this.prisma.$queryRaw<ExamQuestionRow[]>`
+        parsedDistribution.map(
+          (distribution) =>
+            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
             SELECT
               q.id,
               q.question_text,
@@ -1545,7 +1567,7 @@ export class ExamRuntimeService implements OnModuleInit {
   ): Promise<ExamQuestionRow[]> {
     if (rows.length === 0) return [];
     const ids = rows.map((q) => q.id);
-    const withFiles = await this.prisma.question.findMany({
+    const withFiles = await this.prisma.current.question.findMany({
       where: { id: { in: ids } },
       select: {
         id: true,
@@ -1578,7 +1600,7 @@ export class ExamRuntimeService implements OnModuleInit {
       sample_size: number | null;
       distribution: string | null;
     },
-    db: Prisma.TransactionClient | PrismaService = this.prisma,
+    db: Prisma.TransactionClient = this.prisma.current,
   ) {
     const existingCount = await db.submissionQuestions.count({
       where: { submission_id: submissionId },

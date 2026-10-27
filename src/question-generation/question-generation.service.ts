@@ -50,7 +50,12 @@ export class QuestionGenerationService {
   /** Reusable target policy; call again before execution and later bank commit. */
   async authorizeTarget(
     actor: GenerationActor,
-    target: { topic_id: string; chapter_id: string },
+    target: {
+      topic_id: string;
+      chapter_id: string | null;
+      plan_id?: string | null;
+      plan_snapshot?: unknown;
+    },
   ) {
     if (
       actor?.role !== UserRole.LECTURER ||
@@ -61,6 +66,19 @@ export class QuestionGenerationService {
         HttpStatus.FORBIDDEN,
         'AI question generation requires a lecturer',
       );
+    }
+    if (!target.chapter_id && target.plan_id) {
+      const owned = await this.repository.findOwnedTopic(
+        actor.id,
+        target.topic_id,
+      );
+      if (!owned)
+        throw new QuestionGenerationException(
+          'AI_TARGET_NOT_FOUND',
+          HttpStatus.NOT_FOUND,
+          'Plan subject unavailable',
+        );
+      return { id: null, topic: owned };
     }
     const parsed = targetSchema.safeParse(target);
     if (!parsed.success) throw this.invalidRequest();
@@ -86,7 +104,8 @@ export class QuestionGenerationService {
   ): Promise<GeneratedDrafts> {
     const command = this.parseCommand(input);
     const owned = await this.authorizeTarget(actor, command);
-    if (command.source.mode !== 'text') throw this.invalidRequest();
+    if (command.source.mode !== 'text' || !command.chapter_id)
+      throw this.invalidRequest();
     const result = await this.client.generate({
       text: command.source.text,
       topic: Array.from(owned.topic.name.trim()).slice(0, 200).join('') || null,
@@ -96,7 +115,7 @@ export class QuestionGenerationService {
     await this.authorizeTarget(actor, command);
     return {
       topic_id: owned.topic.id,
-      chapter_id: owned.id,
+      chapter_id: command.chapter_id,
       questions: result.questions,
     };
   }

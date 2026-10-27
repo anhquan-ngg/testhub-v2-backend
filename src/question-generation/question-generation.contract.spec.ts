@@ -104,7 +104,7 @@ describe('text-generation.v1 contract', () => {
       ],
     },
     {
-      question_configs: Array.from({ length: 11 }, () => ({
+      question_configs: Array.from({ length: 21 }, () => ({
         question_type: 'SINGLE_CHOICE',
         question_format: 'KNOWLEDGE',
         count: 1,
@@ -198,7 +198,10 @@ describe('text-generation.v1 contract', () => {
 
   it('serializes choices once and keeps correct_answer null without bank IO', () => {
     const question = fixture.internal_response.questions[0];
-    const bank = toQuestionBankDraft(question, fixture.command.chapter_id);
+    const bank = toQuestionBankDraft(
+      question,
+      fixture.command.chapter_id ?? '',
+    );
     expect(bank).toEqual({
       ...question,
       chapter_id: fixture.command.chapter_id,

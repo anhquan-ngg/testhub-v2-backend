@@ -44,7 +44,7 @@ describe('QuestionGenerationService authorization', () => {
     expect(repository.findOwnedTarget).toHaveBeenCalledWith({
       ownerId: actor.id,
       topicId: owned.topic.id,
-      chapterId: owned.id,
+      chapterId: owned.id ?? '',
     });
     expect(client.generate).toHaveBeenCalledWith(fixture.internal_request);
     expect(repository.findOwnedTarget.mock.invocationCallOrder[0]).toBeLessThan(

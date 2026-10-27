@@ -16,11 +16,14 @@ import { GenerationBatchService } from './generation-batch.service';
 import { GenerationBatchController } from './generation-batch.controller';
 import { GenerationReviewRepository } from './generation-review.repository';
 import { GenerationReviewService } from './generation-review.service';
+import { KnowledgePlanService } from './knowledge-plan.service';
+import { KnowledgePlanRepository } from './knowledge-plan.repository';
+import { KnowledgePlanController } from './knowledge-plan.controller';
 
 /** Public batch API and persistence; queue execution lives in the worker module. */
 @Module({
   imports: [ConfigModule, PrismaModule, RagAccessModule],
-  controllers: [GenerationBatchController],
+  controllers: [GenerationBatchController, KnowledgePlanController],
   providers: [
     {
       provide: AI_SERVICE_OPTIONS,
@@ -45,12 +48,15 @@ import { GenerationReviewService } from './generation-review.service';
     GenerationBatchService,
     GenerationReviewRepository,
     GenerationReviewService,
+    KnowledgePlanRepository,
+    KnowledgePlanService,
   ],
   exports: [
     QuestionGenerationService,
     DocumentGenerationService,
     GenerationBatchRepository,
     AI_SERVICE_OPTIONS,
+    KnowledgePlanService,
   ],
 })
 export class QuestionGenerationModule {}

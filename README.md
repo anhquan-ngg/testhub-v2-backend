@@ -1,5 +1,32 @@
 # TestHub V2 - Backend System
 
+## Background dev processes (2026-10-25)
+
+- npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.
+- Use dev:* wrappers, not global PM2. State/logs are under ignored .tmp/pm2-dev; custom IPC sockets also isolate Windows instances. Production ecosystem.config.cjs stays separate.
+- Restart apps only on a completed zero-error Nest build. Dev config disables output deletion and enables noEmitOnError; do not run another compiler against dist concurrently.
+- dev:logs prefixes every stdout/stderr line as [process-name] - message. Closing logs leaves apps running. Graceful IPC shutdown forwards to Nest hooks and drains workers.
+- npm run test:dev-runner uses real PM2/Nest with synthetic apps in an isolated temp project, never user DB/Redis/AI.
+
+
+## Knowledge plans (2026-10-25)
+
+- Lecturer generation starts with a subject-owned document, not a bank chapter.
+- KnowledgePlan stores full-source outline, editable tree/objectives/page refs and topic x cognitive counts. Confirmed revisions freeze into batch snapshots.
+- The AI worker prepares plans; retrieval is per cognitive cell. Only explicit approved question commit may resolve/create required chapter branches.
+- Match normalized sibling names conservatively, reject ambiguous matches; batch then subject locks serialize planned commits. No fixed tree-depth limit.
+- See docs/knowledge-plans.md for API, new migrations, deployment order, limits and tests. Historical migrations must remain unchanged.
+- Question config row limit is now 20 (total questions still <=20). CONTINUITY.md is local and ignored/untracked.
+
+
+## Authentication sessions
+
+Students have one active browser session. A device switch requires explicit
+confirmation and responsible-lecturer/admin approval while an exam is in progress.
+Lecturers/admins retain independent sessions across devices. Apply the additive
+`20261024090000_add_auth_sessions` migration explicitly and restart both apps;
+existing tokens require login again. See [auth session setup and contract](docs/auth-sessions.md).
+
 ## File-based RAG question generation (2026-10-23)
 
 - The batch API also accepts source.mode=document with immutable version_id and

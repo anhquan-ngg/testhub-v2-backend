@@ -14,13 +14,23 @@ export class DocumentRepository {
       ...(ownerId ? { created_by: ownerId } : {}),
       is_deleted: false,
       creator: { role: UserRole.LECTURER, status: UserStatus.ACTIVE },
-      chapter: { is_deleted: false },
+      OR: [{ chapter_id: null }, { chapter: { is_deleted: false } }],
       topic: { is_deleted: false, ...(ownerId ? { created_by: ownerId } : {}) },
     };
   }
 
   /** Verify chapter membership and current target ownership. */
-  target(ownerId: string, topicId: string, chapterId: string) {
+  target(ownerId: string, topicId: string, chapterId: string | null) {
+    if (!chapterId)
+      return this.prisma.topic.findFirst({
+        where: {
+          id: topicId,
+          created_by: ownerId,
+          is_deleted: false,
+          creator: { role: UserRole.LECTURER, status: UserStatus.ACTIVE },
+        },
+        select: { id: true },
+      });
     return this.prisma.chapter.findFirst({
       where: {
         id: chapterId,
@@ -42,7 +52,7 @@ export class DocumentRepository {
     ownerId: string;
     title: string;
     topicId: string;
-    chapterId: string;
+    chapterId: string | null;
     version: Prisma.LearningDocumentVersionUncheckedCreateWithoutDocumentInput;
   }) {
     return this.prisma.learningDocument.create({

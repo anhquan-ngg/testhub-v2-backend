@@ -44,7 +44,7 @@ export const createDocumentSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
     topic_id: z.string().uuid(),
-    chapter_id: z.string().uuid(),
+    chapter_id: z.string().uuid().nullable().optional().default(null),
     upload: uploadDocumentSchema,
   })
   .strict();

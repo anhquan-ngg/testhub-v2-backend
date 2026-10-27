@@ -18,6 +18,20 @@ describe('ExamRuntimeService', () => {
       },
     };
 
+    Object.defineProperty(mockPrismaService, 'current', {
+      get: () => mockPrismaService,
+    });
+    Object.defineProperty(mockPrismaService, 'inTransaction', {
+      value: (callback: (tx: unknown) => unknown) =>
+        (
+          mockPrismaService as unknown as {
+            $transaction: (cb: typeof callback) => unknown;
+          }
+        ).$transaction(callback),
+    });
+    Object.defineProperty(mockPrismaService, 'afterCommit', {
+      value: (action: () => unknown) => action(),
+    });
     const mockEventsService = {};
     const mockQueueService = {};
     const mockNotificationGateway = {};
@@ -377,7 +391,12 @@ describe('ExamRuntimeService', () => {
       mockExamSessionUpdateMany.mockResolvedValue({});
       mockQueueEnqueueGradeSubmission.mockResolvedValue({});
 
-      await service.completeSubmission(submissionId, new Date(), undefined, studentId);
+      await service.completeSubmission(
+        submissionId,
+        new Date(),
+        undefined,
+        studentId,
+      );
 
       expect(mockSubmissionFindFirst).toHaveBeenCalledWith({
         where: {
@@ -398,7 +417,9 @@ describe('ExamRuntimeService', () => {
   describe('assertRetakeAllowed', () => {
     it('never blocks practice exams, regardless of prior completions', async () => {
       const mockSubmissionFindFirst = jest.fn();
-      (prismaService as any).submission = { findFirst: mockSubmissionFindFirst };
+      (prismaService as any).submission = {
+        findFirst: mockSubmissionFindFirst,
+      };
 
       const grant = await (service as any).assertRetakeAllowed(
         { id: 'exam-1', practice: true },
@@ -411,7 +432,9 @@ describe('ExamRuntimeService', () => {
 
     it('allows an official exam with no prior COMPLETED submission', async () => {
       const mockSubmissionFindFirst = jest.fn().mockResolvedValue(null);
-      (prismaService as any).submission = { findFirst: mockSubmissionFindFirst };
+      (prismaService as any).submission = {
+        findFirst: mockSubmissionFindFirst,
+      };
 
       const grant = await (service as any).assertRetakeAllowed(
         { id: 'exam-1', practice: false },
@@ -426,7 +449,9 @@ describe('ExamRuntimeService', () => {
         .fn()
         .mockResolvedValue({ id: 'prior-submission' });
       const mockRetryGrantFindFirst = jest.fn().mockResolvedValue(null);
-      (prismaService as any).submission = { findFirst: mockSubmissionFindFirst };
+      (prismaService as any).submission = {
+        findFirst: mockSubmissionFindFirst,
+      };
       (prismaService as any).examRetryGrant = {
         findFirst: mockRetryGrantFindFirst,
       };
@@ -447,7 +472,9 @@ describe('ExamRuntimeService', () => {
         .mockResolvedValue({ id: 'prior-submission' });
       const grantRow = { id: 'grant-1', consumed_at: null };
       const mockRetryGrantFindFirst = jest.fn().mockResolvedValue(grantRow);
-      (prismaService as any).submission = { findFirst: mockSubmissionFindFirst };
+      (prismaService as any).submission = {
+        findFirst: mockSubmissionFindFirst,
+      };
       (prismaService as any).examRetryGrant = {
         findFirst: mockRetryGrantFindFirst,
       };
@@ -459,7 +486,11 @@ describe('ExamRuntimeService', () => {
 
       expect(grant).toBe(grantRow);
       expect(mockRetryGrantFindFirst).toHaveBeenCalledWith({
-        where: { exam_id: 'exam-1', student_id: 'student-1', consumed_at: null },
+        where: {
+          exam_id: 'exam-1',
+          student_id: 'student-1',
+          consumed_at: null,
+        },
         orderBy: { created_at: 'desc' },
       });
     });
@@ -468,10 +499,20 @@ describe('ExamRuntimeService', () => {
   describe('extendTime', () => {
     it('rejects an extraMinutes value outside the allowed range', async () => {
       await expect(
-        service.extendTime('exam-1', 'student-1', { id: 'lect-1', role: 'LECTURER' } as any, 0),
+        service.extendTime(
+          'exam-1',
+          'student-1',
+          { id: 'lect-1', role: 'LECTURER' } as any,
+          0,
+        ),
       ).rejects.toThrow();
       await expect(
-        service.extendTime('exam-1', 'student-1', { id: 'lect-1', role: 'LECTURER' } as any, 999),
+        service.extendTime(
+          'exam-1',
+          'student-1',
+          { id: 'lect-1', role: 'LECTURER' } as any,
+          999,
+        ),
       ).rejects.toThrow();
     });
 
@@ -596,9 +637,7 @@ describe('ExamRuntimeService', () => {
       jest
         .spyOn(service as any, 'ensureSubmissionQuestions')
         .mockResolvedValue(undefined);
-      jest
-        .spyOn(service as any, 'formatSubmissionExam')
-        .mockResolvedValue({});
+      jest.spyOn(service as any, 'formatSubmissionExam').mockResolvedValue({});
       jest.spyOn(service, 'emitActiveCount').mockResolvedValue(undefined);
 
       const txSubmissionCreate = jest.fn().mockResolvedValue({ id: 'new-sub' });

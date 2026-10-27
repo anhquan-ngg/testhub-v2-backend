@@ -7,7 +7,8 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Logger } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { AuthSessionService } from '../auth/auth-session.service';
+import type { SessionClaims } from '../auth/auth-session.service';
 import { Server, Socket } from 'socket.io';
 import { ExamRuntimeService } from './exam-runtime.service';
 
@@ -28,30 +29,15 @@ export class ExamRuntimeGateway implements OnGatewayConnection {
 
   constructor(
     private readonly runtimeService: ExamRuntimeService,
-    private readonly jwtService: JwtService,
+    private readonly sessions: AuthSessionService,
   ) {}
 
-  handleConnection(client: Socket) {
+  async handleConnection(client: Socket) {
     try {
-      const token =
-        (client.handshake.auth?.token as string | undefined) ||
-        (client.handshake.headers?.authorization?.replace(
-          /^Bearer\s+/i,
-          '',
-        ) ?? undefined);
-
-      if (!token) {
-        client.disconnect();
-        return;
-      }
-
-      const payload = this.jwtService.verify<{ sub: string }>(token);
-      client.data.userId = payload.sub;
-    } catch (err: any) {
-      this.logger.warn(
-        `WS /exam-runtime rejected client ${client.id}: ${err?.message ?? err}`,
-      );
-      client.disconnect();
+      const claims = await this.sessions.bindSocket(client);
+      (client.data as { userId?: string }).userId = claims.sub;
+    } catch {
+      client.disconnect(true);
     }
   }
 
@@ -60,7 +46,7 @@ export class ExamRuntimeGateway implements OnGatewayConnection {
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { submissionId?: string },
   ) {
-    const userId = client.data.userId as string | undefined;
+    const userId = (client.data as { userId?: string }).userId;
 
     if (!userId || !payload?.submissionId) {
       client.emit('exam:heartbeat_error', {
@@ -70,14 +56,19 @@ export class ExamRuntimeGateway implements OnGatewayConnection {
     }
 
     try {
-      const result = await this.runtimeService.heartbeat(
-        payload.submissionId,
+      const claims = (client.data as { sessionClaims: SessionClaims })
+        .sessionClaims;
+      await this.sessions.assertActive(claims);
+      const result = await this.sessions.runStudentMutation(
         userId,
+        claims.sid,
+        () =>
+          this.runtimeService.heartbeat(payload.submissionId as string, userId),
       );
       client.emit('exam:heartbeat_ack', result);
-    } catch (error: any) {
+    } catch {
       client.emit('exam:heartbeat_error', {
-        message: error?.message ?? 'Heartbeat failed',
+        message: 'Heartbeat failed',
       });
     }
   }

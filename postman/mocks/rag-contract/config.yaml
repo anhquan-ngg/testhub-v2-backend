@@ -1,0 +1,11 @@
+version: 1
+id: ef1312b4-8430-450e-9b2e-fc71030671d6
+name: rag-contract
+slug: rag-contract
+protocol: http
+interceptRequests: true
+port: 4519
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

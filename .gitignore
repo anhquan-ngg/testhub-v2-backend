@@ -67,3 +67,6 @@ quanna-keypair.pem
 *.dump
 
 /src/generated/prisma
+
+# Local agent handoff notes (keep files, do not track)
+CONTINUITY.md

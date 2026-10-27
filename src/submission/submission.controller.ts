@@ -12,6 +12,8 @@ import {
   Query,
   Req,
   UseGuards,
+  UseInterceptors,
+  ForbiddenException,
 } from '@nestjs/common';
 import { SubmissionService } from './submission.service';
 import { JwtGuard } from '@/auth/guards/jwt.guard';
@@ -28,6 +30,10 @@ import { CreateSubmissionDto } from './dto/create-submission.dto';
 import { QuerySubmissionDto } from './dto/query-submission.dto';
 import { UpdateSubmissionDto } from './dto/update-submission.dto';
 import { Request } from 'express';
+import { StudentSessionInterceptor } from '@/auth/student-session.interceptor';
+import { Roles } from '@/common/decorators/roles.decorator';
+import { RolesGuard } from '@/common/guards/roles.guard';
+import { UserRole } from '@prisma/client';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -38,12 +44,14 @@ interface AuthenticatedRequest extends Request {
 
 @ApiTags('Submissions')
 @ApiBearerAuth()
-@UseGuards(JwtGuard)
+@UseGuards(JwtGuard, RolesGuard)
+@UseInterceptors(StudentSessionInterceptor)
 @Controller('submission')
 export class SubmissionController {
   constructor(private readonly submissionService: SubmissionService) {}
 
   @Post()
+  @Roles(UserRole.ADMIN, UserRole.LECTURER)
   @ApiOperation({ summary: 'Create a submission' })
   @ApiResponse({ status: 201, description: 'Submission created successfully.' })
   create(@Body() dto: CreateSubmissionDto) {
@@ -83,6 +91,7 @@ export class SubmissionController {
   }
 
   @Patch(':id')
+  @Roles(UserRole.ADMIN, UserRole.LECTURER)
   @ApiOperation({ summary: 'Update a submission' })
   update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -92,6 +101,7 @@ export class SubmissionController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.ADMIN, UserRole.LECTURER)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Soft-delete a submission' })
   remove(@Param('id', new ParseUUIDPipe()) id: string) {
@@ -103,7 +113,11 @@ export class SubmissionController {
   @ApiOperation({ summary: 'Start an exam' })
   @ApiResponse({ status: 200, description: 'Exam started successfully.' })
   @ApiResponse({ status: 401, description: 'Unauthorized - No valid token' })
-  async startExam(@Body() startExamDto: StartExamDto) {
+  async startExam(
+    @Body() startExamDto: StartExamDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    if (startExamDto.studentId !== req.user.id) throw new ForbiddenException();
     return this.submissionService.startExam(startExamDto);
   }
 

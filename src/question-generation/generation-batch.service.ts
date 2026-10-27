@@ -16,6 +16,7 @@ import type { AiServiceOptions } from './ai-service.config';
 import { GenerationBatchRepository } from './generation-batch.repository';
 import { QuestionGenerationService } from './question-generation.service';
 import type { GenerationActor } from './question-generation.service';
+import type { FrozenPlan } from './knowledge-plan.contract';
 
 type StorageOperation =
   | 'authorize_target'
@@ -40,6 +41,7 @@ export class GenerationBatchService {
     actor: GenerationActor,
     input: unknown,
     key: string | undefined,
+    plan?: FrozenPlan,
   ) {
     this.assertLecturer(actor);
     if (!this.options.enabled)
@@ -52,12 +54,21 @@ export class GenerationBatchService {
       );
     }
     const command = this.generation.parseCommand(input);
+    if (
+      Boolean(command.plan_id) !== Boolean(plan) ||
+      (plan && command.plan_id !== plan.plan_id)
+    )
+      throw new BadRequestException(
+        'Use the approved plan generation endpoint',
+      );
     await this.storage('authorize_target', () =>
       this.generation.authorizeTarget(actor, command),
     );
     if (command.source.mode === 'document')
       await this.storage('authorize_target', () =>
-        this.documents.authorize(actor.id, command),
+        plan
+          ? this.documents.authorize(actor.id, command, plan)
+          : this.documents.authorize(actor.id, command),
       );
     // Explicit canonical order: semantically identical commands have the same hash.
     const canonical = {
@@ -67,6 +78,7 @@ export class GenerationBatchService {
           : 'text-generation.v1',
       topic_id: command.topic_id,
       chapter_id: command.chapter_id,
+      ...(plan ? { plan_snapshot: plan } : {}),
       source: command.source,
       question_configs: command.question_configs,
       language: command.language,
@@ -81,6 +93,7 @@ export class GenerationBatchService {
         key,
         hash,
         command,
+        plan,
       }),
     );
     return {

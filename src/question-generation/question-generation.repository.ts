@@ -6,6 +6,18 @@ import { PrismaService } from '../prisma/prisma.service';
 @Injectable()
 export class QuestionGenerationRepository {
   constructor(private readonly prisma: PrismaService) {}
+  /** Authorize a topic-owned plan before any bank chapter exists. */
+  findOwnedTopic(ownerId: string, topicId: string) {
+    return this.prisma.topic.findFirst({
+      where: {
+        id: topicId,
+        created_by: ownerId,
+        is_deleted: false,
+        creator: { role: 'LECTURER', status: 'ACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+  }
 
   /** Return an active chapter only inside its active lecturer-owned topic. */
   findOwnedTarget(input: {

@@ -1,3 +1,5 @@
+import { frozenPlanSchema } from './knowledge-plan.contract';
+import { resolvePlannedChapters } from './planned-chapters';
 import {
   ConflictException,
   Injectable,
@@ -29,6 +31,8 @@ const itemSelect = {
   status: true,
   data: true,
   provenance: true,
+  plan_item_id: true,
+  target_chapter_id: true,
   errors: true,
   warnings: true,
   question_id: true,
@@ -65,6 +69,7 @@ export class GenerationReviewRepository {
         status: true,
         topic_id: true,
         chapter_id: true,
+        plan_snapshot: true,
         chapter: { select: { topic_id: true } },
       },
     });
@@ -72,7 +77,10 @@ export class GenerationReviewRepository {
     const authorized = await tx.questionGenerationBatch.count({
       where: { id: batchId, ...this.batches.ownerScope(ownerId) },
     });
-    if (!authorized || batch.chapter.topic_id !== batch.topic_id)
+    if (
+      !authorized ||
+      (batch.chapter && batch.chapter.topic_id !== batch.topic_id)
+    )
       throw new NotFoundException('Question generation batch not found');
     if (
       batch.status !== BatchStatus.REVIEW_REQUIRED &&
@@ -230,6 +238,38 @@ export class GenerationReviewRepository {
     return this.prisma.$transaction(
       async (tx) => {
         const batch = await this.lock(tx, ownerId, batchId, true);
+        const selected = await Promise.all(
+          input.items.map((ref) =>
+            this.item(tx, batchId, ref.id, ref.revision),
+          ),
+        );
+        if (
+          selected.some(
+            (item) =>
+              item.status !== ItemStatus.COMMITTED &&
+              (item.status !== ItemStatus.APPROVED ||
+                item.reviewed_by !== ownerId ||
+                !item.reviewed_at ||
+                !generatedQuestionSchema.safeParse(item.data).success),
+          )
+        )
+          throw new ConflictException(
+            'Only approved valid drafts can be committed',
+          );
+        const plan = batch.plan_snapshot
+          ? frozenPlanSchema.parse(batch.plan_snapshot)
+          : null;
+        const targets = plan
+          ? await resolvePlannedChapters({
+              tx,
+              ownerId,
+              topicId: batch.topic_id,
+              plan,
+              itemIds: selected
+                .filter((item) => item.status !== ItemStatus.COMMITTED)
+                .map((item) => item.plan_item_id ?? ''),
+            })
+          : new Map<string, string>();
         const mappings: { item_id: string; question_id: string }[] = [];
         for (const ref of input.items) {
           const item = await this.item(tx, batchId, ref.id, ref.revision);
@@ -257,8 +297,13 @@ export class GenerationReviewRepository {
             throw new ConflictException(
               'Approved draft is invalid; edit and approve it again',
             );
+          const chapterId = plan
+            ? targets.get(item.plan_item_id ?? '')
+            : batch.chapter_id;
+          if (!chapterId)
+            throw new ConflictException('Question target unavailable');
           const question = await tx.question.create({
-            data: toQuestionBankDraft(validated.data, batch.chapter_id),
+            data: toQuestionBankDraft(validated.data, chapterId),
             select: { id: true },
           });
           const changed = await tx.questionGenerationItem.updateMany({
@@ -272,6 +317,7 @@ export class GenerationReviewRepository {
             data: {
               status: ItemStatus.COMMITTED,
               question_id: question.id,
+              target_chapter_id: chapterId,
               committed_at: new Date(),
             },
           });
@@ -315,7 +361,7 @@ export class GenerationReviewRepository {
         });
         return { batch_id: batchId, status, questions: mappings };
       },
-      { timeout: 15_000 },
+      { timeout: 60_000 },
     );
   }
 }

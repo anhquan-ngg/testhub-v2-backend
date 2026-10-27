@@ -75,9 +75,10 @@ export class CreateGenerationBatchDto {
   @IsUUID()
   topic_id: string;
 
-  @ApiProperty({ format: 'uuid' })
+  @ApiProperty({ format: 'uuid', nullable: true })
+  @IsOptional()
   @IsUUID()
-  chapter_id: string;
+  chapter_id: string | null;
 
   @ApiProperty({
     oneOf: [
