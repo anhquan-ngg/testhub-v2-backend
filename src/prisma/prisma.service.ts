@@ -1,4 +1,9 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
@@ -13,6 +18,7 @@ export class PrismaService
   private readonly pool: Pool;
   private readonly rootClient: Prisma.TransactionClient;
   private closed = false;
+  private readonly logger = new Logger(PrismaService.name);
   private readonly transactionContext =
     new AsyncLocalStorage<Prisma.TransactionClient>();
   private readonly commitEffects = new WeakMap<
@@ -52,8 +58,14 @@ export class PrismaService
       const results = await Promise.allSettled(
         effects.map((action) => Promise.resolve().then(action)),
       );
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed?.status === 'rejected') throw failed.reason;
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          this.logger.error({
+            event: 'after_commit_effect_failed',
+            effect_index: index,
+          });
+        }
+      });
     }
   }
 

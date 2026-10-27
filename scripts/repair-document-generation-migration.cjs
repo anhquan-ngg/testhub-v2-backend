@@ -102,7 +102,18 @@ const backupDirectory = path.join(root, '.tmp', 'migration-backups', stamp);
 fs.mkdirSync(backupDirectory, { recursive: true });
 const containerBackup = '/tmp/testhub-before-migration-repair-' + stamp + '.dump';
 docker(['exec', container, 'pg_dump', '-U', 'postgres', '-d', database, '--format=custom', '--file', containerBackup]);
-docker(['cp', container + ':' + containerBackup, path.join(backupDirectory, 'database.dump')]);
+let copied = false;
+try {
+  docker(['cp', container + ':' + containerBackup, path.join(backupDirectory, 'database.dump')]);
+  copied = true;
+} finally {
+  try {
+    docker(['exec', container, 'rm', '-f', containerBackup]);
+  } catch (error) {
+    // Cleanup must not replace the original copy failure.
+    if (copied) throw error;
+  }
+}
 if (fs.statSync(path.join(backupDirectory, 'database.dump')).size === 0) throw new Error('Backup is empty');
 fs.writeFileSync(path.join(backupDirectory, 'migration-history-before.json'), JSON.stringify(history, null, 2));
 fs.writeFileSync(path.join(backupDirectory, 'receipt.json'), JSON.stringify({ database, migration,
