@@ -36,6 +36,7 @@ function setup() {
       .fn()
       .mockResolvedValue({ chapters: { count: 1 }, questions: { count: 0 } }),
     findMany: jest.fn().mockResolvedValue({ data: [] }),
+    hierarchy: jest.fn().mockResolvedValue({ data: [] }),
     findTopic: jest.fn((id: string) => Promise.resolve(topics[id] ?? null)),
     ancestorChain: jest.fn((_topic: string, id: string) => {
       const result: Array<(typeof chapters)[string]> = [],
@@ -71,6 +72,30 @@ function setup() {
 }
 
 describe('ChaptersService ownership', () => {
+  it.each(['subtree', 'ancestors'] as const)(
+    'defaults %s pagination to 10 and preserves explicit values',
+    async (kind) => {
+      const { repo, service } = setup();
+      await service.hierarchy('root', kind, {}, owner);
+      expect(repo.hierarchy).toHaveBeenLastCalledWith(
+        't1',
+        'root',
+        kind,
+        1,
+        10,
+      );
+
+      await service.hierarchy('root', kind, { page: 2, limit: 25 }, owner);
+      expect(repo.hierarchy).toHaveBeenLastCalledWith(
+        't1',
+        'root',
+        kind,
+        2,
+        25,
+      );
+    },
+  );
+
   it('scopes listing to the caller, but not for admins', async () => {
     const { repo, service } = setup();
     await service.findAll({ topic_id: 't2' }, owner);

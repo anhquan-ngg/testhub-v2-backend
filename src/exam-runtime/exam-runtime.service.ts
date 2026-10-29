@@ -928,57 +928,62 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async gradeSubmission(submissionId: string) {
-    const submission = await this.prisma.current.submission.findFirst({
-      where: { id: submissionId, is_deleted: false },
-      include: {
-        exam: { select: { title: true } },
-        questions: { select: { score: true } },
-      },
-    });
-
-    if (!submission) {
-      throw new NotFoundException('Submission not found');
-    }
-
-    const questionCount = submission.questions.length;
-    const totalScore =
-      questionCount > 0
-        ? (submission.questions.reduce(
-            (total, question) =>
-              total + (question.score ? Number(question.score) : 0),
-            0,
-          ) *
-            10) /
-          questionCount
-        : 0;
-    const roundedScore = Math.round(totalScore * 100) / 100;
-    const rating = this.getRating(roundedScore);
-
-    await this.prisma.current.submission.update({
-      where: { id: submissionId },
-      data: {
-        total_score: roundedScore,
-        rating,
-      },
-    });
-
-    try {
-      await this.notificationGateway.sendToUser(submission.student_id, {
-        recipient_id: submission.student_id,
-        type: NotificationType.SUCCESS,
-        title: 'Bài thi đã được chấm',
-        content: `Bài thi "${submission.exam.title}" đã có kết quả.`,
-        target_id: submissionId,
-        target_type: 'SUBMISSION',
-        link: `/result/${submissionId}`,
+    const notification = await this.prisma.inTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM submissions WHERE id = ${submissionId}::uuid FOR UPDATE`;
+      const submission = await tx.submission.findFirst({
+        where: { id: submissionId, is_deleted: false },
+        include: {
+          exam: { select: { title: true } },
+          questions: { where: { is_deleted: false }, select: { score: true } },
+        },
       });
-    } catch (notifyError: any) {
-      this.logger.warn(
-        `Failed to send grade notification for submission ${submissionId}: ${notifyError?.message ?? notifyError}`,
+      if (!submission) throw new NotFoundException('Submission not found');
+      // Serialize with manual publication; delayed or retried jobs cannot overwrite it.
+      if (
+        submission.status !== SubmissionStatus.COMPLETED ||
+        submission.grading_revision > 0
+      )
+        return null;
+      const totalRaw = submission.questions.reduce(
+        (sum, q) => sum + Number(q.score || 0),
+        0,
       );
-    }
+      const rounded = submission.questions.length
+        ? Math.round(((totalRaw * 10) / submission.questions.length) * 100) /
+          100
+        : 0;
+      await tx.submission.update({
+        where: { id: submissionId },
+        data: {
+          total_score: rounded,
+          rating: this.getRating(rounded),
+          grading_revision: { increment: 1 },
+        },
+      });
+      return tx.notification.create({
+        data: {
+          recipient_id: submission.student_id,
+          type: NotificationType.SUCCESS,
+          title: 'Bài thi đã được chấm',
+          content: `Bài thi "${submission.exam.title}" đã có kết quả.`,
+          target_id: submissionId,
+          target_type: 'SUBMISSION',
+          link: `/result/${submissionId}`,
+        },
+      });
+    });
+    if (!notification) return;
+    await this.prisma.afterCommit(async () => {
+      try {
+        await this.notificationGateway.emitSavedNotification(notification);
+      } catch {
+        this.logger.warn({
+          event: 'grade_notification_failed',
+          submission_id: submissionId,
+        });
+      }
+    });
   }
-
   async notifyExamStartingSoon(examId: string) {
     const exam = await this.prisma.current.exam.findFirst({
       where: { id: examId, is_deleted: false },

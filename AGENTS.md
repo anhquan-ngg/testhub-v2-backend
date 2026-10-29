@@ -7,6 +7,12 @@
 - BY_CHAPTER always includes the entire active subtree. Reuse common/chapter-question-selection.ts for globally disjoint quotas, including overlapping selected branches; validate at save and runtime.
 - Flat paginated subtree/ancestor APIs preserve owner and role checks. No new migration is needed. See docs/chapter-hierarchy.md for contracts, limits and isolated tests.
 
+## Prisma transaction adapter (2026-10-30)
+
+- PrismaService uses SerializedPrismaPg to queue query, savepoint and release operations per transaction; pooled queries and independent transactions stay parallel.
+- Keep this at the driver adapter boundary: sequential application awaits cannot prevent Prisma's internal relation-query fan-out. Do not edit node_modules or suppress the pg deprecation warning.
+- See docs/prisma-pg-serialization.md for offline regressions and removal once a verified upstream stable fix ships. No migration or dependency upgrade is required.
+
 ## Background dev processes (2026-10-25)
 
 - npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.
