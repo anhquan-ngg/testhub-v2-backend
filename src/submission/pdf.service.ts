@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { selectChapterQuestionIds } from '../common/chapter-question-selection';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import * as puppeteer from 'puppeteer';
 
@@ -349,26 +354,20 @@ export class PdfService {
         }
       }
     } else if (exam.mode === 'BY_CHAPTER') {
-      if (exam.distribution) {
-        const parsedDistribution = JSON.parse(exam.distribution);
-        for (const dist of parsedDistribution) {
-          const questionsData = await this.prisma.$queryRaw<any[]>`
-            SELECT q.*
-            FROM "questions" AS q
-            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-            WHERE c.topic_id = ${exam.topic_id}
-              AND c.is_deleted = false
-              AND q.is_deleted = false
-              AND (
-                q.chapter_id = ${dist.chapter_id}
-                OR c.parent_id = ${dist.chapter_id}
-              )
-            ORDER BY RANDOM()
-            LIMIT ${dist.quantity}
-          `;
-          questions.push(...questionsData);
-        }
-      }
+      const ids = await selectChapterQuestionIds(
+        this.prisma.current,
+        exam.topic_id,
+        exam.distribution,
+      );
+      const selected = await this.prisma.current.question.findMany({
+        where: { id: { in: ids }, is_deleted: false },
+      });
+      if (selected.length !== ids.length)
+        throw new BadRequestException(
+          'Question bank changed during selection; retry',
+        );
+      const byId = new Map(selected.map((question) => [question.id, question]));
+      questions = ids.map((id) => byId.get(id)).filter(Boolean);
     }
 
     const htmlContent = `

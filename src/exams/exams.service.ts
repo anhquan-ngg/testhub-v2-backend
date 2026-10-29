@@ -1,3 +1,4 @@
+import { parseChapterDistribution } from '../common/chapter-question-selection';
 import {
   ConflictException,
   Injectable,
@@ -18,6 +19,16 @@ export class ExamsService {
   ) {}
 
   async create(lecturerId: string, dto: CreateExamDto) {
+    if (dto.mode === 'BY_CHAPTER') {
+      const distribution = JSON.stringify(
+        parseChapterDistribution(dto.distribution),
+      );
+      dto = { ...dto, distribution };
+      await this.examsRepository.validateChapterDistribution(
+        dto.topic_id,
+        distribution,
+      );
+    }
     const exam = await this.examsRepository.create(lecturerId, dto);
     await this.examRuntimeQueue.scheduleExam(exam);
     return exam;
@@ -36,7 +47,17 @@ export class ExamsService {
   }
 
   async update(id: string, dto: UpdateExamDto) {
-    await this.findOne(id);
+    const current = await this.findOne(id);
+    if ((dto.mode ?? current.mode) === 'BY_CHAPTER') {
+      const distribution = JSON.stringify(
+        parseChapterDistribution(dto.distribution ?? current.distribution),
+      );
+      dto = { ...dto, distribution };
+      await this.examsRepository.validateChapterDistribution(
+        dto.topic_id ?? current.topic_id,
+        distribution,
+      );
+    }
     const exam = await this.examsRepository.update(id, dto);
     await this.examRuntimeQueue.scheduleExam(exam);
     return exam;

@@ -1,5 +1,12 @@
 # TestHub V2 - Backend System
 
+## Chapter hierarchy (2026-10-27)
+
+Adjacency List + Recursive CTE support arbitrary-depth chapter trees. BY_CHAPTER
+includes every descendant and allocates globally distinct questions across
+overlapping rows. No schema change or migration is required. See
+[chapter hierarchy, API and tests](docs/chapter-hierarchy.md).
+
 ## Background dev processes (2026-10-25)
 
 - npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.

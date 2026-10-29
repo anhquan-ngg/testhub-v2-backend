@@ -22,7 +22,11 @@ export class ChaptersService {
     if (dto.parent_id) {
       await this.assertValidParent(dto.parent_id, dto.topic_id);
     }
-    return this.chaptersRepository.create(dto, actor.isAdmin);
+    return this.chaptersRepository.create(
+      dto,
+      actor.isAdmin,
+      this.ownerScope(actor),
+    );
   }
 
   async findAll(query: QueryChapterDto, actor: ChapterActor) {
@@ -30,6 +34,23 @@ export class ChaptersService {
       query,
       actor.isAdmin,
       this.ownerScope(actor),
+    );
+  }
+
+  /** Return an authorized flat ancestor/subtree page, including the selected chapter. */
+  async hierarchy(
+    id: string,
+    kind: 'ancestors' | 'subtree',
+    query: QueryChapterDto,
+    actor: ChapterActor,
+  ) {
+    const chapter = await this.findOne(id, actor);
+    return this.chaptersRepository.hierarchy(
+      chapter.topic_id,
+      id,
+      kind,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
   }
 
@@ -79,15 +100,22 @@ export class ChaptersService {
 
     const { parent_id: requestedParentId, ...rest } = dto;
     void requestedParentId;
-    return this.chaptersRepository.update(id, {
-      ...rest,
-      ...(parentId !== existing.parent_id && { parent_id: parentId }),
-    });
+    return this.chaptersRepository.update(
+      id,
+      {
+        ...rest,
+        ...(parentId !== existing.parent_id && { parent_id: parentId }),
+      },
+      this.ownerScope(actor),
+    );
   }
 
   async remove(id: string, actor: ChapterActor) {
     await this.findOne(id, actor);
-    const result = await this.chaptersRepository.softDelete(id);
+    const result = await this.chaptersRepository.softDelete(
+      id,
+      this.ownerScope(actor),
+    );
     return {
       message: 'Chapter, child chapters, and questions deleted successfully',
       chapters: result.chapters.count,
@@ -127,18 +155,16 @@ export class ChaptersService {
     }
     if (!chapterId) return;
 
-    const visited = new Set<string>();
-    let current: typeof parent | null = parent;
-    while (current && !visited.has(current.id)) {
-      if (current.id === chapterId) {
-        throw new BadRequestException(
-          'A chapter cannot be moved under itself or its own sub-chapter',
-        );
-      }
-      visited.add(current.id);
-      current = current.parent_id
-        ? await this.chaptersRepository.findParentCandidate(current.parent_id)
-        : null;
-    }
+    const chain = await this.chaptersRepository.ancestorChain(
+      topicId,
+      parentId,
+    );
+    if (
+      !chain.some((node) => node.parent_id === null) ||
+      chain.some((node) => node.id === chapterId)
+    )
+      throw new BadRequestException(
+        'A chapter cannot be moved under itself, its descendants or an invalid chain',
+      );
   }
 }

@@ -1,5 +1,12 @@
 # AGENTS.md — testhub-v2-backend
 
+## Chapter hierarchy (2026-10-27)
+
+- Chapter.parent_id remains the adjacency list. Reuse common/chapter-tree.ts for cycle-safe recursive CTE traversal; do not assume root/direct-child depth.
+- Serialize structural writes with topic row locks, ordered by UUID, and revalidate after locking. Imports and approved AI commits must follow the same locking convention.
+- BY_CHAPTER always includes the entire active subtree. Reuse common/chapter-question-selection.ts for globally disjoint quotas, including overlapping selected branches; validate at save and runtime.
+- Flat paginated subtree/ancestor APIs preserve owner and role checks. No new migration is needed. See docs/chapter-hierarchy.md for contracts, limits and isolated tests.
+
 ## Background dev processes (2026-10-25)
 
 - npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.

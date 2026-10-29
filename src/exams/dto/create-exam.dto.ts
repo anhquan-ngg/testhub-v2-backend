@@ -47,14 +47,22 @@ export class CreateExamDto {
   @IsEnum(ExamMode)
   mode?: ExamMode;
 
-  @ApiPropertyOptional({ example: 30, description: 'Number of random questions (RANDOM_N mode)' })
+  @ApiPropertyOptional({
+    example: 30,
+    description: 'Number of random questions (RANDOM_N mode)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   sample_size?: number;
 
-  @ApiPropertyOptional({ example: '{"KNOWLEDGE":10,"UNDERSTANDING":10,"APPLYING":5,"ADVANCED":5}' })
+  @ApiPropertyOptional({
+    description:
+      'JSON distribution. BY_CHAPTER: [{chapter_id: UUID, quantity: positive integer}]. Every chapter includes all active descendants, at any depth. Rows may overlap; selected question IDs are globally distinct. Existing JSON shape is unchanged.',
+    example:
+      '[{"chapter_id":"11111111-1111-4111-8111-111111111111","quantity":10}]',
+  })
   @IsOptional()
   @IsString()
   distribution?: string;
