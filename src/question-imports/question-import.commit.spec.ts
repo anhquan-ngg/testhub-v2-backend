@@ -48,6 +48,7 @@ function setup() {
     },
   };
   const tx = {
+    topic: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     chapter: {
       findMany: jest
         .fn()

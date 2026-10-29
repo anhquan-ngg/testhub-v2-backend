@@ -1,4 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  activeChapterTree,
+  ancestorChapters,
+  descendantChapterIds,
+  lockChapterTopics,
+} from '../common/chapter-tree';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateChapterDto } from './dto/create-chapter.dto';
 import { QueryChapterDto } from './dto/query-chapter.dto';
@@ -24,11 +35,83 @@ export class ChaptersRepository {
     deleted_at: true,
   } satisfies Prisma.ChapterSelect;
 
-  async create(dto: CreateChapterDto, isAdmin = false) {
-    return this.prisma.chapter.create({
-      data: dto,
-      select: isAdmin ? this.adminSelect : this.publicSelect,
+  async create(dto: CreateChapterDto, isAdmin = false, ownerId?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await lockChapterTopics(tx, [dto.topic_id]);
+      await this.assertTopic(tx, dto.topic_id, ownerId);
+      if (dto.parent_id)
+        await this.assertParent(tx, dto.topic_id, dto.parent_id);
+      return tx.chapter.create({
+        data: dto,
+        select: isAdmin ? this.adminSelect : this.publicSelect,
+      });
     });
+  }
+
+  private async assertTopic(
+    tx: Prisma.TransactionClient,
+    id: string,
+    ownerId?: string,
+  ) {
+    const topic = await tx.topic.findFirst({
+      where: {
+        id,
+        is_deleted: false,
+        ...(ownerId ? { created_by: ownerId } : {}),
+      },
+      select: { id: true },
+    });
+    if (!topic) throw new NotFoundException('Topic unavailable');
+  }
+
+  private async assertParent(
+    tx: Prisma.TransactionClient,
+    topicId: string,
+    parentId: string,
+    movedId?: string,
+  ) {
+    const chain = await ancestorChapters(tx, topicId, parentId);
+    if (!chain.length || !chain.some((node) => node.parent_id === null))
+      throw new BadRequestException(
+        'Parent chapter is unavailable or has an invalid ancestor chain',
+      );
+    if (movedId && chain.some((node) => node.id === movedId))
+      throw new BadRequestException(
+        'A chapter cannot be moved under itself or its own sub-chapter',
+      );
+  }
+
+  /** Batch-load the ancestor chain using a cycle-safe recursive CTE. */
+  ancestorChain(topicId: string, id: string) {
+    return ancestorChapters(this.prisma.current, topicId, id);
+  }
+
+  /** Reuse the active rooted subtree traversal for any depth. */
+  descendants(topicId: string, id: string) {
+    return descendantChapterIds(this.prisma.current, topicId, id);
+  }
+
+  /** Paginated flat tree projection; child loading never serializes recursive JSON. */
+  async hierarchy(
+    topicId: string,
+    id: string,
+    kind: 'ancestors' | 'subtree',
+    page: number,
+    limit: number,
+  ) {
+    const ids =
+      kind === 'subtree'
+        ? await this.descendants(topicId, id)
+        : (await this.ancestorChain(topicId, id)).map((node) => node.id);
+    const where = { id: { in: ids }, topic_id: topicId, is_deleted: false };
+    const data = await this.prisma.chapter.findMany({
+      where,
+      select: this.publicSelect,
+      orderBy: [{ order: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+    return { data, total: ids.length, page, limit };
   }
 
   /**
@@ -42,9 +125,17 @@ export class ChaptersRepository {
   async findMany(query: QueryChapterDto, isAdmin = false, ownerId?: string) {
     const { page = 1, limit = 10, topic_id, parent_id, search } = query;
     const skip = (page - 1) * limit;
+    const activeIds = !isAdmin
+      ? (
+          await this.prisma.$queryRaw<{ id: string }[]>(
+            Prisma.sql`WITH RECURSIVE ${activeChapterTree(topic_id, ownerId)} SELECT id FROM active_chapters`,
+          )
+        ).map((row) => row.id)
+      : null;
 
     const where: Prisma.ChapterWhereInput = {
       ...(!isAdmin && { is_deleted: false }),
+      ...(activeIds ? { id: { in: activeIds } } : {}),
       ...(ownerId && { topic: this.topicScope(ownerId) }),
       ...(topic_id && { topic_id }),
       ...(parent_id !== undefined && { parent_id: parent_id ?? null }),
@@ -56,7 +147,7 @@ export class ChaptersRepository {
         where,
         skip,
         take: limit,
-        orderBy: { order: 'asc' },
+        orderBy: [{ order: 'asc' }, { id: 'asc' }],
         select: isAdmin ? this.adminSelect : this.publicSelect,
       }),
       this.prisma.chapter.count({ where }),
@@ -68,7 +159,7 @@ export class ChaptersRepository {
   async findById(id: string, isAdmin = false, ownerId?: string) {
     const chapterSelect = isAdmin ? this.adminSelect : this.publicSelect;
 
-    return this.prisma.chapter.findFirst({
+    const chapter = await this.prisma.chapter.findFirst({
       where: {
         id,
         ...(!isAdmin && { is_deleted: false }),
@@ -101,6 +192,11 @@ export class ChaptersRepository {
         },
       },
     });
+    if (chapter && !isAdmin) {
+      const ancestors = await this.ancestorChain(chapter.topic_id, id);
+      if (!ancestors.some((node) => node.parent_id === null)) return null;
+    }
+    return chapter;
   }
 
   async findTopic(topicId: string) {
@@ -117,31 +213,65 @@ export class ChaptersRepository {
     });
   }
 
-  async update(id: string, data: Prisma.ChapterUncheckedUpdateInput) {
-    return this.prisma.chapter.update({ where: { id }, data });
+  async update(
+    id: string,
+    data: Prisma.ChapterUncheckedUpdateInput,
+    ownerId?: string,
+  ) {
+    const before = await this.prisma.chapter.findUnique({
+      where: { id },
+      select: { topic_id: true },
+    });
+    if (!before) throw new NotFoundException('Chapter unavailable');
+    return this.prisma.$transaction(async (tx) => {
+      const nextTopic =
+        typeof data.topic_id === 'string' ? data.topic_id : before.topic_id;
+      await lockChapterTopics(tx, [before.topic_id, nextTopic]);
+      const current = await tx.chapter.findFirst({
+        where: { id, is_deleted: false },
+        select: { topic_id: true, parent_id: true },
+      });
+      if (!current || current.topic_id !== before.topic_id)
+        throw new ConflictException('Chapter changed; reload before moving it');
+      await this.assertTopic(tx, current.topic_id, ownerId);
+      await this.assertTopic(tx, nextTopic, ownerId);
+      if (
+        nextTopic !== current.topic_id &&
+        (await tx.chapter.count({
+          where: { parent_id: id, is_deleted: false },
+        }))
+      )
+        throw new ConflictException(
+          'A chapter with sub-chapters cannot be moved to another topic',
+        );
+      const parent =
+        typeof data.parent_id === 'string'
+          ? data.parent_id
+          : data.parent_id === null
+            ? null
+            : current.parent_id;
+      if (parent) await this.assertParent(tx, nextTopic, parent, id);
+      return tx.chapter.update({ where: { id }, data });
+    });
   }
 
-  async softDelete(id: string) {
+  async softDelete(id: string, ownerId?: string) {
     return this.prisma.$transaction(async (tx) => {
+      const before = await tx.chapter.findUnique({
+        where: { id },
+        select: { topic_id: true },
+      });
+      if (!before) throw new NotFoundException('Chapter unavailable');
+      await lockChapterTopics(tx, [before.topic_id]);
+      await this.assertTopic(tx, before.topic_id, ownerId);
+      const current = await tx.chapter.findUnique({
+        where: { id },
+        select: { topic_id: true },
+      });
+      if (current?.topic_id !== before.topic_id)
+        throw new ConflictException('Chapter changed; reload');
       const deletedAt = new Date();
-      const chaptersToDelete = new Set<string>([id]);
-      let parentIds = [id];
-
-      while (parentIds.length) {
-        const children = await tx.chapter.findMany({
-          where: {
-            parent_id: { in: parentIds },
-            is_deleted: false,
-          },
-          select: { id: true },
-        });
-        parentIds = children
-          .map((chapter) => chapter.id)
-          .filter((chapterId) => !chaptersToDelete.has(chapterId));
-        parentIds.forEach((chapterId) => chaptersToDelete.add(chapterId));
-      }
-
-      const chapterIds = Array.from(chaptersToDelete);
+      const chapterIds = await descendantChapterIds(tx, before.topic_id, id);
 
       const chapters = await tx.chapter.updateMany({
         where: {

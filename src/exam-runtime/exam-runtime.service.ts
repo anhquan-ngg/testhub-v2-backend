@@ -1,3 +1,4 @@
+import { selectChapterQuestionIds } from '../common/chapter-question-selection';
 import {
   BadRequestException,
   ForbiddenException,
@@ -89,11 +90,6 @@ export type MonitorRosterResponse = {
 type ExamDistributionItem = {
   question_type: string;
   question_format: string;
-  quantity: number;
-};
-
-type ExamChapterDistributionItem = {
-  chapter_id: string;
   quantity: number;
 };
 
@@ -1508,51 +1504,33 @@ export class ExamRuntimeService implements OnModuleInit {
       const enrichedByType = await this.enrichQuestionsWithFiles(flatByType);
       questions.push(...enrichedByType);
     } else if (examData.mode === ExamMode.BY_CHAPTER) {
-      let parsedDistribution: ExamChapterDistributionItem[];
-      try {
-        parsedDistribution = examData.distribution
-          ? (JSON.parse(examData.distribution) as ExamChapterDistributionItem[])
-          : [];
-      } catch {
-        throw new BadRequestException(
-          'Exam distribution data is malformed (BY_CHAPTER)',
-        );
-      }
-      const byChapterResults = await Promise.all(
-        parsedDistribution.map(
-          (distribution) =>
-            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
-            FROM "questions" AS q
-            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-            WHERE c.topic_id = ${examData.topic_id}
-              AND c.is_deleted = false
-              AND q.is_deleted = false
-              AND (
-                q.chapter_id = ${distribution.chapter_id}
-                OR c.parent_id = ${distribution.chapter_id}
-              )
-            ORDER BY RANDOM()
-            LIMIT ${distribution.quantity}
-          `,
-        ),
+      const ids = await selectChapterQuestionIds(
+        this.prisma.current,
+        examData.topic_id,
+        examData.distribution,
       );
-      const flatByChapter = byChapterResults.flat();
-      for (let i = 0; i < parsedDistribution.length; i++) {
-        this.assertEnoughQuestions(
-          byChapterResults[i].length,
-          parsedDistribution[i].quantity,
-          `BY_CHAPTER (${parsedDistribution[i].chapter_id})`,
+      const rows = await this.prisma.current.question.findMany({
+        where: { id: { in: ids }, is_deleted: false },
+        select: {
+          id: true,
+          question_text: true,
+          options: true,
+          question_type: true,
+          question_format: true,
+        },
+      });
+      if (rows.length !== ids.length)
+        throw new BadRequestException(
+          'Question bank changed during selection; retry',
         );
-      }
-      const enrichedByChapter =
-        await this.enrichQuestionsWithFiles(flatByChapter);
-      questions.push(...enrichedByChapter);
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      questions.push(
+        ...(await this.enrichQuestionsWithFiles(
+          ids
+            .map((id) => byId.get(id))
+            .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+        )),
+      );
     }
 
     if (questions.length === 0) {
@@ -1563,7 +1541,7 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   private async enrichQuestionsWithFiles(
-    rows: ExamQuestionRow[],
+    rows: Omit<ExamQuestionRow, 'files'>[],
   ): Promise<ExamQuestionRow[]> {
     if (rows.length === 0) return [];
     const ids = rows.map((q) => q.id);

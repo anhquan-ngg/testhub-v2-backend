@@ -1,3 +1,4 @@
+import { lockChapterTopics } from '../common/chapter-tree';
 import {
   BadRequestException,
   ConflictException,
@@ -893,6 +894,7 @@ export class QuestionImportService {
     userId: string,
     items: Array<{ id: string; chapter_id: string | null; data: unknown }>,
   ): Promise<Map<string, string>> {
+    await lockChapterTopics(tx, [topicId]);
     const tree = await this.loadChapterTree(topicId, userId, tx);
     const result = new Map<string, string>();
     for (const item of items) {
