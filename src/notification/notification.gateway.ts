@@ -98,6 +98,16 @@ export class NotificationGateway
     return saved;
   }
 
+  /** Emits an already committed notification without creating a duplicate DB row. */
+  async emitSavedNotification(
+    notification: { recipient_id: string } & Record<string, unknown>,
+  ) {
+    const userId = notification.recipient_id;
+    this.server.to(`user:${userId}`).emit('notification:new', notification);
+    const count: unknown = await this.notificationService.countUnread(userId);
+    this.server.to(`user:${userId}`).emit('notification:unread_count', count);
+  }
+
   // Broadcast đến tất cả user (thông báo hệ thống)
   async broadcast(notification: NotificationCreateInput) {
     this.server.emit('notification:broadcast', notification);

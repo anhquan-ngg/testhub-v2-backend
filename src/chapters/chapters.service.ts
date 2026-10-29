@@ -50,7 +50,7 @@ export class ChaptersService {
       id,
       kind,
       query.page ?? 1,
-      query.limit ?? 20,
+      query.limit ?? 10,
     );
   }
 
