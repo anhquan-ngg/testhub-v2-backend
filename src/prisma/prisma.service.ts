@@ -5,7 +5,7 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { SerializedPrismaPg } from './serialized-prisma-pg';
 import { Pool } from 'pg';
 import { Prisma } from '@prisma/client';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -81,7 +81,7 @@ export class PrismaService
     const connectionString = process.env.DATABASE_URL;
 
     const pool = new Pool({ connectionString });
-    const adapter = new PrismaPg(pool);
+    const adapter = new SerializedPrismaPg(pool);
 
     super({
       adapter,

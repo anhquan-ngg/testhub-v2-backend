@@ -1,3 +1,4 @@
+import { selectChapterQuestionIds } from '../common/chapter-question-selection';
 import {
   BadRequestException,
   ForbiddenException,
@@ -89,11 +90,6 @@ export type MonitorRosterResponse = {
 type ExamDistributionItem = {
   question_type: string;
   question_format: string;
-  quantity: number;
-};
-
-type ExamChapterDistributionItem = {
-  chapter_id: string;
   quantity: number;
 };
 
@@ -932,57 +928,62 @@ export class ExamRuntimeService implements OnModuleInit {
   }
 
   async gradeSubmission(submissionId: string) {
-    const submission = await this.prisma.current.submission.findFirst({
-      where: { id: submissionId, is_deleted: false },
-      include: {
-        exam: { select: { title: true } },
-        questions: { select: { score: true } },
-      },
-    });
-
-    if (!submission) {
-      throw new NotFoundException('Submission not found');
-    }
-
-    const questionCount = submission.questions.length;
-    const totalScore =
-      questionCount > 0
-        ? (submission.questions.reduce(
-            (total, question) =>
-              total + (question.score ? Number(question.score) : 0),
-            0,
-          ) *
-            10) /
-          questionCount
-        : 0;
-    const roundedScore = Math.round(totalScore * 100) / 100;
-    const rating = this.getRating(roundedScore);
-
-    await this.prisma.current.submission.update({
-      where: { id: submissionId },
-      data: {
-        total_score: roundedScore,
-        rating,
-      },
-    });
-
-    try {
-      await this.notificationGateway.sendToUser(submission.student_id, {
-        recipient_id: submission.student_id,
-        type: NotificationType.SUCCESS,
-        title: 'Bài thi đã được chấm',
-        content: `Bài thi "${submission.exam.title}" đã có kết quả.`,
-        target_id: submissionId,
-        target_type: 'SUBMISSION',
-        link: `/result/${submissionId}`,
+    const notification = await this.prisma.inTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM submissions WHERE id = ${submissionId}::uuid FOR UPDATE`;
+      const submission = await tx.submission.findFirst({
+        where: { id: submissionId, is_deleted: false },
+        include: {
+          exam: { select: { title: true } },
+          questions: { where: { is_deleted: false }, select: { score: true } },
+        },
       });
-    } catch (notifyError: any) {
-      this.logger.warn(
-        `Failed to send grade notification for submission ${submissionId}: ${notifyError?.message ?? notifyError}`,
+      if (!submission) throw new NotFoundException('Submission not found');
+      // Serialize with manual publication; delayed or retried jobs cannot overwrite it.
+      if (
+        submission.status !== SubmissionStatus.COMPLETED ||
+        submission.grading_revision > 0
+      )
+        return null;
+      const totalRaw = submission.questions.reduce(
+        (sum, q) => sum + Number(q.score || 0),
+        0,
       );
-    }
+      const rounded = submission.questions.length
+        ? Math.round(((totalRaw * 10) / submission.questions.length) * 100) /
+          100
+        : 0;
+      await tx.submission.update({
+        where: { id: submissionId },
+        data: {
+          total_score: rounded,
+          rating: this.getRating(rounded),
+          grading_revision: { increment: 1 },
+        },
+      });
+      return tx.notification.create({
+        data: {
+          recipient_id: submission.student_id,
+          type: NotificationType.SUCCESS,
+          title: 'Bài thi đã được chấm',
+          content: `Bài thi "${submission.exam.title}" đã có kết quả.`,
+          target_id: submissionId,
+          target_type: 'SUBMISSION',
+          link: `/result/${submissionId}`,
+        },
+      });
+    });
+    if (!notification) return;
+    await this.prisma.afterCommit(async () => {
+      try {
+        await this.notificationGateway.emitSavedNotification(notification);
+      } catch {
+        this.logger.warn({
+          event: 'grade_notification_failed',
+          submission_id: submissionId,
+        });
+      }
+    });
   }
-
   async notifyExamStartingSoon(examId: string) {
     const exam = await this.prisma.current.exam.findFirst({
       where: { id: examId, is_deleted: false },
@@ -1358,53 +1359,38 @@ export class ExamRuntimeService implements OnModuleInit {
    * fresh draw. Public so the offline print flow (ExamPrintService) builds
    * its variants from exactly the same selection rules as online attempts.
    */
-  async selectQuestions(examData: {
-    id: string;
-    topic_id: string;
-    mode: ExamMode;
-    sample_size: number | null;
-    distribution: string | null;
-  }) {
+  async selectQuestions(
+    examData: {
+      id: string;
+      topic_id: string;
+      mode: ExamMode;
+      sample_size: number | null;
+      distribution: string | null;
+    },
+    db?: Prisma.TransactionClient,
+  ): Promise<ExamQuestionRow[]> {
+    if (!db) {
+      return this.prisma.inTransaction((tx) =>
+        this.selectQuestions(examData, tx),
+      );
+    }
     let questions: ExamQuestionRow[] = [];
 
     if (examData.mode === ExamMode.MANUAL) {
-      const examQuestions = await this.prisma.current.examQuestions.findMany({
+      const examQuestions = await db.examQuestions.findMany({
         where: {
           exam_id: examData.id,
           is_deleted: false,
           question: { is_deleted: false },
         },
-        include: {
-          question: {
-            select: {
-              id: true,
-              question_text: true,
-              options: true,
-              question_type: true,
-              question_format: true,
-              files: {
-                orderBy: { order: 'asc' },
-                select: {
-                  order: true,
-                  file: {
-                    select: { id: true, url: true, name: true, type: true },
-                  },
-                },
-              },
-            },
-          },
-        },
+        select: { question_id: true },
       });
-      questions = examQuestions.map((eq) => ({
-        ...(eq.question as any),
-        files:
-          (eq.question as any).files?.map((qf: any) => ({
-            ...qf.file,
-            order: qf.order,
-          })) ?? [],
-      })) as ExamQuestionRow[];
+      questions = await this.hydrateSelectedQuestions(
+        examQuestions.map((row) => ({ id: row.question_id })),
+        db,
+      );
     } else if (examData.mode === ExamMode.RANDOM_N) {
-      const questionIdsRows = await this.prisma.current.question.findMany({
+      const questionIdsRows = await db.question.findMany({
         where: {
           is_deleted: false,
           chapter: {
@@ -1433,31 +1419,10 @@ export class ExamRuntimeService implements OnModuleInit {
       const selectedIds = shuffled.slice(0, limit);
 
       if (selectedIds.length > 0) {
-        const questionRows = await this.prisma.current.question.findMany({
-          where: {
-            id: { in: selectedIds },
-          },
-          select: {
-            id: true,
-            question_text: true,
-            options: true,
-            question_type: true,
-            question_format: true,
-            files: {
-              orderBy: { order: 'asc' },
-              select: {
-                order: true,
-                file: {
-                  select: { id: true, url: true, name: true, type: true },
-                },
-              },
-            },
-          },
-        });
-        questions = questionRows.map((q) => ({
-          ...q,
-          files: (q.files ?? []).map((qf) => ({ ...qf.file, order: qf.order })),
-        })) as ExamQuestionRow[];
+        questions = await this.hydrateSelectedQuestions(
+          selectedIds.map((id) => ({ id })),
+          db,
+        );
       }
       this.assertEnoughQuestions(
         questions.length,
@@ -1478,13 +1443,8 @@ export class ExamRuntimeService implements OnModuleInit {
       const byTypeResults = await Promise.all(
         parsedDistribution.map(
           (distribution) =>
-            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
+            db.$queryRaw<Array<{ id: string }>>`
+            SELECT q.id
             FROM "questions" AS q
             INNER JOIN "chapters" AS c ON c.id = q.chapter_id
             WHERE c.topic_id = ${examData.topic_id}
@@ -1505,54 +1465,21 @@ export class ExamRuntimeService implements OnModuleInit {
           `BY_TYPE (${parsedDistribution[i].question_type}/${parsedDistribution[i].question_format})`,
         );
       }
-      const enrichedByType = await this.enrichQuestionsWithFiles(flatByType);
+      const enrichedByType = await this.hydrateSelectedQuestions(
+        flatByType,
+        db,
+      );
       questions.push(...enrichedByType);
     } else if (examData.mode === ExamMode.BY_CHAPTER) {
-      let parsedDistribution: ExamChapterDistributionItem[];
-      try {
-        parsedDistribution = examData.distribution
-          ? (JSON.parse(examData.distribution) as ExamChapterDistributionItem[])
-          : [];
-      } catch {
-        throw new BadRequestException(
-          'Exam distribution data is malformed (BY_CHAPTER)',
-        );
-      }
-      const byChapterResults = await Promise.all(
-        parsedDistribution.map(
-          (distribution) =>
-            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
-            FROM "questions" AS q
-            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
-            WHERE c.topic_id = ${examData.topic_id}
-              AND c.is_deleted = false
-              AND q.is_deleted = false
-              AND (
-                q.chapter_id = ${distribution.chapter_id}
-                OR c.parent_id = ${distribution.chapter_id}
-              )
-            ORDER BY RANDOM()
-            LIMIT ${distribution.quantity}
-          `,
-        ),
+      const ids = await selectChapterQuestionIds(
+        db,
+        examData.topic_id,
+        examData.distribution,
       );
-      const flatByChapter = byChapterResults.flat();
-      for (let i = 0; i < parsedDistribution.length; i++) {
-        this.assertEnoughQuestions(
-          byChapterResults[i].length,
-          parsedDistribution[i].quantity,
-          `BY_CHAPTER (${parsedDistribution[i].chapter_id})`,
-        );
-      }
-      const enrichedByChapter =
-        await this.enrichQuestionsWithFiles(flatByChapter);
-      questions.push(...enrichedByChapter);
+      questions = await this.hydrateSelectedQuestions(
+        ids.map((id) => ({ id })),
+        db,
+      );
     }
 
     if (questions.length === 0) {
@@ -1562,15 +1489,31 @@ export class ExamRuntimeService implements OnModuleInit {
     return questions;
   }
 
-  private async enrichQuestionsWithFiles(
-    rows: ExamQuestionRow[],
+  private async hydrateSelectedQuestions(
+    rows: { id: string }[],
+    db: Prisma.TransactionClient,
   ): Promise<ExamQuestionRow[]> {
     if (rows.length === 0) return [];
-    const ids = rows.map((q) => q.id);
-    const withFiles = await this.prisma.current.question.findMany({
-      where: { id: { in: ids } },
+    const ids = [...new Set(rows.map((q) => q.id))];
+    // SHARE blocks soft deletion as well as hard deletion until the attempt commits.
+    const locked = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM questions
+      WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+        AND is_deleted = false
+      ORDER BY id FOR SHARE
+    `);
+    if (locked.length !== ids.length)
+      throw new BadRequestException(
+        'Question bank changed during selection; retry',
+      );
+    const withFiles = await db.question.findMany({
+      where: { id: { in: ids }, is_deleted: false },
       select: {
         id: true,
+        question_text: true,
+        options: true,
+        question_type: true,
+        question_format: true,
         files: {
           orderBy: { order: 'asc' },
           select: {
@@ -1582,13 +1525,18 @@ export class ExamRuntimeService implements OnModuleInit {
         },
       },
     });
-    const filesById = new Map(
-      withFiles.map((q) => [
-        q.id,
-        q.files.map((qf) => ({ ...qf.file, order: qf.order })),
-      ]),
-    );
-    return rows.map((q) => ({ ...q, files: filesById.get(q.id) ?? [] }));
+    const byId = new Map(withFiles.map((question) => [question.id, question]));
+    return rows.map(({ id }) => {
+      const question = byId.get(id);
+      if (!question)
+        throw new BadRequestException(
+          'Question bank changed during selection; retry',
+        );
+      return {
+        ...question,
+        files: question.files.map((qf) => ({ ...qf.file, order: qf.order })),
+      };
+    });
   }
 
   private async ensureSubmissionQuestions(
@@ -1600,8 +1548,13 @@ export class ExamRuntimeService implements OnModuleInit {
       sample_size: number | null;
       distribution: string | null;
     },
-    db: Prisma.TransactionClient = this.prisma.current,
-  ) {
+    db?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (!db) {
+      return this.prisma.inTransaction((tx) =>
+        this.ensureSubmissionQuestions(submissionId, examData, tx),
+      );
+    }
     const existingCount = await db.submissionQuestions.count({
       where: { submission_id: submissionId },
     });
@@ -1610,7 +1563,7 @@ export class ExamRuntimeService implements OnModuleInit {
       return;
     }
 
-    const questions = await this.selectQuestions(examData);
+    const questions = await this.selectQuestions(examData, db);
     const orderedQuestions = this.shuffleArray(questions);
 
     await db.submissionQuestions.createMany({

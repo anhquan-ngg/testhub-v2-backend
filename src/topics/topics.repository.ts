@@ -151,7 +151,7 @@ export class TopicsRepository {
           SELECT child.id
           FROM "chapters" child
           INNER JOIN chapter_tree parent ON child."parent_id" = parent.id
-          WHERE child."is_deleted" = false
+          WHERE child."is_deleted" = false AND child."topic_id" = CAST(${id} AS uuid)
         )
         SELECT id FROM chapter_tree
       `;

@@ -102,8 +102,12 @@ export class SubmissionRepository {
     });
   }
 
-  async update(id: string, dto: UpdateSubmissionDto) {
-    return this.prisma.submission.update({
+  async update(
+    id: string,
+    dto: UpdateSubmissionDto,
+    db: Prisma.TransactionClient = this.prisma.current,
+  ) {
+    return db.submission.update({
       where: { id },
       data: this.toUpdateData(dto),
       include: this.include,

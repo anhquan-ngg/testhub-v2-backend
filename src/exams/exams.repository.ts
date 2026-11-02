@@ -4,12 +4,21 @@ import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
 import { QueryExamDto } from './dto/query-exam.dto';
 import { Prisma } from '@prisma/client';
+import { selectChapterQuestionIds } from '../common/chapter-question-selection';
 
 type Db = Prisma.TransactionClient | PrismaService;
 
 @Injectable()
 export class ExamsRepository {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Reject unsatisfiable/foreign chapter quotas before saving; runtime rechecks the live bank. */
+  async validateChapterDistribution(
+    topicId: string,
+    distribution: string,
+  ): Promise<void> {
+    await selectChapterQuestionIds(this.prisma.current, topicId, distribution);
+  }
 
   async create(lecturerId: string, dto: CreateExamDto) {
     return this.prisma.exam.create({
@@ -19,12 +28,24 @@ export class ExamsRepository {
         exam_start_time: new Date(dto.exam_start_time),
         exam_end_time: new Date(dto.exam_end_time),
       },
-      include: { topic: true, lecturer: { select: { id: true, full_name: true, email: true } } },
+      include: {
+        topic: true,
+        lecturer: { select: { id: true, full_name: true, email: true } },
+      },
     });
   }
 
   async findMany(query: QueryExamDto) {
-    const { page = 1, limit = 10, topic_id, lecturer_id, mode, is_public, practice, search } = query;
+    const {
+      page = 1,
+      limit = 10,
+      topic_id,
+      lecturer_id,
+      mode,
+      is_public,
+      practice,
+      search,
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.ExamWhereInput = {
@@ -46,7 +67,9 @@ export class ExamsRepository {
         include: {
           topic: true,
           lecturer: { select: { id: true, full_name: true, email: true } },
-          _count: { select: { questions: true, registrations: true, submissions: true } },
+          _count: {
+            select: { questions: true, registrations: true, submissions: true },
+          },
         },
       }),
       this.prisma.exam.count({ where }),
@@ -72,7 +95,8 @@ export class ExamsRepository {
 
   async update(id: string, dto: UpdateExamDto) {
     const data: Prisma.ExamUpdateInput = { ...dto };
-    if (dto.exam_start_time) data.exam_start_time = new Date(dto.exam_start_time);
+    if (dto.exam_start_time)
+      data.exam_start_time = new Date(dto.exam_start_time);
     if (dto.exam_end_time) data.exam_end_time = new Date(dto.exam_end_time);
 
     return this.prisma.exam.update({ where: { id }, data });
@@ -95,7 +119,9 @@ export class ExamsRepository {
 
   async removeQuestion(examId: string, questionId: string) {
     return this.prisma.examQuestions.delete({
-      where: { exam_id_question_id: { exam_id: examId, question_id: questionId } },
+      where: {
+        exam_id_question_id: { exam_id: examId, question_id: questionId },
+      },
     });
   }
 
@@ -105,7 +131,9 @@ export class ExamsRepository {
     db: Db = this.prisma,
   ) {
     return db.examQuestions.findUnique({
-      where: { exam_id_question_id: { exam_id: examId, question_id: questionId } },
+      where: {
+        exam_id_question_id: { exam_id: examId, question_id: questionId },
+      },
     });
   }
 }

@@ -36,7 +36,19 @@ function setup() {
       .fn()
       .mockResolvedValue({ chapters: { count: 1 }, questions: { count: 0 } }),
     findMany: jest.fn().mockResolvedValue({ data: [] }),
+    hierarchy: jest.fn().mockResolvedValue({ data: [] }),
     findTopic: jest.fn((id: string) => Promise.resolve(topics[id] ?? null)),
+    ancestorChain: jest.fn((_topic: string, id: string) => {
+      const result: Array<(typeof chapters)[string]> = [],
+        seen = new Set<string>();
+      let current = chapters[id];
+      while (current && !seen.has(current.id)) {
+        seen.add(current.id);
+        result.push(current);
+        current = chapters[current.parent_id ?? ''];
+      }
+      return Promise.resolve(result);
+    }),
     findParentCandidate: jest.fn((id: string) =>
       Promise.resolve(chapters[id] ?? null),
     ),
@@ -60,6 +72,30 @@ function setup() {
 }
 
 describe('ChaptersService ownership', () => {
+  it.each(['subtree', 'ancestors'] as const)(
+    'defaults %s pagination to 10 and preserves explicit values',
+    async (kind) => {
+      const { repo, service } = setup();
+      await service.hierarchy('root', kind, {}, owner);
+      expect(repo.hierarchy).toHaveBeenLastCalledWith(
+        't1',
+        'root',
+        kind,
+        1,
+        10,
+      );
+
+      await service.hierarchy('root', kind, { page: 2, limit: 25 }, owner);
+      expect(repo.hierarchy).toHaveBeenLastCalledWith(
+        't1',
+        'root',
+        kind,
+        2,
+        25,
+      );
+    },
+  );
+
   it('scopes listing to the caller, but not for admins', async () => {
     const { repo, service } = setup();
     await service.findAll({ topic_id: 't2' }, owner);
@@ -128,10 +164,18 @@ describe('ChaptersService ownership', () => {
   it('detaches a chapter only on an explicit null parent_id', async () => {
     const { repo, service } = setup();
     await service.update('child', { parent_id: null }, owner);
-    expect(repo.update).toHaveBeenLastCalledWith('child', { parent_id: null });
+    expect(repo.update).toHaveBeenLastCalledWith(
+      'child',
+      { parent_id: null },
+      owner.id,
+    );
 
     await service.update('child', { name: 'renamed' }, owner);
-    expect(repo.update).toHaveBeenLastCalledWith('child', { name: 'renamed' });
+    expect(repo.update).toHaveBeenLastCalledWith(
+      'child',
+      { name: 'renamed' },
+      owner.id,
+    );
   });
 
   it('refuses to move a chapter that has sub-chapters to another topic', async () => {
@@ -146,20 +190,28 @@ describe('ChaptersService ownership', () => {
     const { repo, service } = setup();
     // Old parent belongs to t1, so it is dropped and the chapter becomes a root.
     await service.update('grandchild', { topic_id: 't3' }, owner);
-    expect(repo.update).toHaveBeenLastCalledWith('grandchild', {
-      topic_id: 't3',
-      parent_id: null,
-    });
+    expect(repo.update).toHaveBeenLastCalledWith(
+      'grandchild',
+      {
+        topic_id: 't3',
+        parent_id: null,
+      },
+      owner.id,
+    );
 
     await service.update(
       'grandchild',
       { topic_id: 't3', parent_id: 'p3' },
       owner,
     );
-    expect(repo.update).toHaveBeenLastCalledWith('grandchild', {
-      topic_id: 't3',
-      parent_id: 'p3',
-    });
+    expect(repo.update).toHaveBeenLastCalledWith(
+      'grandchild',
+      {
+        topic_id: 't3',
+        parent_id: 'p3',
+      },
+      owner.id,
+    );
 
     await expect(
       service.update(

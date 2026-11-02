@@ -61,13 +61,26 @@ export class SubmissionService {
   }
 
   async update(id: string, dto: UpdateSubmissionDto) {
-    await this.findOne(id);
-
-    if (dto.exam_id || dto.student_id) {
-      await this.validateExamAndStudent(dto.exam_id, dto.student_id);
-    }
-
-    return this.submissionRepository.update(id, dto);
+    return this.prisma.inTransaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM submissions WHERE id = ${id}::uuid FOR UPDATE`;
+      const submission = await tx.submission.findFirst({
+        where: { id, is_deleted: false },
+      });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (
+        submission.status === SubmissionStatus.COMPLETED ||
+        dto.total_score !== undefined ||
+        dto.rating !== undefined
+      ) {
+        throw new BadRequestException(
+          'Use the regrading draft/publication workflow for grades; completed submissions are immutable here',
+        );
+      }
+      if (dto.exam_id || dto.student_id) {
+        await this.validateExamAndStudent(dto.exam_id, dto.student_id);
+      }
+      return this.submissionRepository.update(id, dto, tx);
+    });
   }
 
   async remove(id: string) {
@@ -95,117 +108,123 @@ export class SubmissionService {
     submitQuestionDto: SubmitQuestionDto,
     studentId: string,
   ) {
-    // Ownership + status + not-deleted, all in one query. Previously this
-    // looked the submission up by id alone: any authenticated user holding
-    // a submission UUID could write answers into someone else's exam —
-    // including a completed one, before grading ran. This is also the
-    // endpoint that produces the "answered / total" count now shown live
-    // on the lecturer's monitoring page, so it doubles as that feature's
-    // integrity foundation.
-    const submission = await this.prisma.current.submission.findFirst({
-      where: {
-        id: submitQuestionDto.submission_id,
-        student_id: studentId,
-        status: SubmissionStatus.IN_PROGRESS,
-        is_deleted: false,
-      },
-      select: { id: true, exam_id: true },
-    });
-
-    if (!submission) {
-      throw new NotFoundException('Active submission not found');
-    }
-
-    const question = await this.prisma.current.question.findUnique({
-      where: {
-        id: submitQuestionDto.question_id,
-      },
-    });
-
-    if (!question) {
-      throw new NotFoundException('Question not found');
-    }
-
-    let is_correct = false;
-    let score = 0;
-
-    if (question.question_type === 'SINGLE_CHOICE' && question.options) {
-      if (!submitQuestionDto.options) {
-        throw new BadRequestException('Options is required');
-      }
-      const parsedQuestionsOption = JSON.parse(question.options);
-      const parsedOptions = JSON.parse(submitQuestionDto.options);
-
-      const chosenOption = parsedOptions.find(
-        (option: { text: string; isCorrect: boolean }) => option.isCorrect,
-      );
-
-      if (chosenOption) {
-        is_correct = parsedQuestionsOption.find(
-          (option: { text: string; isCorrect: boolean }) =>
-            option.text === chosenOption.text,
-        )?.isCorrect;
-        score = is_correct ? 1 : 0;
-      }
-    } else if (
-      question.question_type === 'MULTIPLE_CHOICE' &&
-      question.options
-    ) {
-      if (!submitQuestionDto.options) {
-        throw new BadRequestException('Options is required');
-      }
-
-      // Options of question
-      const parsedQuestionOptions = JSON.parse(question.options);
-
-      // Correct answers
-      const correctAnswers = parsedQuestionOptions.filter(
-        (opt: { text: string; isCorrect?: boolean }) => opt.isCorrect !== false,
-      );
-
-      // User selected answers
-      const parsedUserOptions = JSON.parse(submitQuestionDto.options);
-
-      // User selected texts
-      const userSelectedTexts = new Set(
-        parsedUserOptions
-          .filter((opt: { isCorrect: boolean }) => opt.isCorrect)
-          .map((opt: { text: string }) => opt.text),
-      );
-
-      let correctMatches = 0;
-
-      // Count correct matches
-      userSelectedTexts.forEach((userOpt) => {
-        if (
-          correctAnswers.find((opt: { text: string }) => opt.text === userOpt)
-        ) {
-          correctMatches++;
-        } else {
-          correctMatches--;
-        }
+    const result = await this.prisma.inTransaction(async (tx) => {
+      // Fence in-flight answers against completion and subsequent grade publication.
+      await tx.$queryRaw`SELECT id FROM submissions WHERE id = ${submitQuestionDto.submission_id}::uuid FOR UPDATE`;
+      // Ownership + status + not-deleted, all in one query. Previously this
+      // looked the submission up by id alone: any authenticated user holding
+      // a submission UUID could write answers into someone else's exam —
+      // including a completed one, before grading ran. This is also the
+      // endpoint that produces the "answered / total" count now shown live
+      // on the lecturer's monitoring page, so it doubles as that feature's
+      // integrity foundation.
+      const submission = await tx.submission.findFirst({
+        where: {
+          id: submitQuestionDto.submission_id,
+          student_id: studentId,
+          status: SubmissionStatus.IN_PROGRESS,
+          is_deleted: false,
+        },
+        select: { id: true, exam_id: true },
       });
 
-      const totalCorrect = correctAnswers.length;
-
-      if (totalCorrect > 0) {
-        const rawScore = correctMatches / totalCorrect;
-        score = Math.max(0, Math.min(1, rawScore));
-        is_correct = score === 1 && userSelectedTexts.size === totalCorrect;
-      } else {
-        score = 0;
-        is_correct = false;
+      if (!submission) {
+        throw new NotFoundException('Active submission not found');
       }
-    } else if (question.question_type === 'ESSAY' && question.correct_answer) {
-      if (!submitQuestionDto.answer) {
-        throw new BadRequestException('Answer is required');
-      }
-      is_correct = submitQuestionDto.answer === question.correct_answer;
-      score = is_correct ? 1 : 0;
-    }
 
-    const submissionQuestion =
-      await this.prisma.current.submissionQuestions.upsert({
+      const question = await tx.question.findUnique({
+        where: {
+          id: submitQuestionDto.question_id,
+        },
+      });
+
+      if (!question) {
+        throw new NotFoundException('Question not found');
+      }
+
+      let is_correct = false;
+      let score = 0;
+
+      if (question.question_type === 'SINGLE_CHOICE' && question.options) {
+        if (!submitQuestionDto.options) {
+          throw new BadRequestException('Options is required');
+        }
+        const parsedQuestionsOption = JSON.parse(question.options);
+        const parsedOptions = JSON.parse(submitQuestionDto.options);
+
+        const chosenOption = parsedOptions.find(
+          (option: { text: string; isCorrect: boolean }) => option.isCorrect,
+        );
+
+        if (chosenOption) {
+          is_correct = parsedQuestionsOption.find(
+            (option: { text: string; isCorrect: boolean }) =>
+              option.text === chosenOption.text,
+          )?.isCorrect;
+          score = is_correct ? 1 : 0;
+        }
+      } else if (
+        question.question_type === 'MULTIPLE_CHOICE' &&
+        question.options
+      ) {
+        if (!submitQuestionDto.options) {
+          throw new BadRequestException('Options is required');
+        }
+
+        // Options of question
+        const parsedQuestionOptions = JSON.parse(question.options);
+
+        // Correct answers
+        const correctAnswers = parsedQuestionOptions.filter(
+          (opt: { text: string; isCorrect?: boolean }) =>
+            opt.isCorrect !== false,
+        );
+
+        // User selected answers
+        const parsedUserOptions = JSON.parse(submitQuestionDto.options);
+
+        // User selected texts
+        const userSelectedTexts = new Set(
+          parsedUserOptions
+            .filter((opt: { isCorrect: boolean }) => opt.isCorrect)
+            .map((opt: { text: string }) => opt.text),
+        );
+
+        let correctMatches = 0;
+
+        // Count correct matches
+        userSelectedTexts.forEach((userOpt) => {
+          if (
+            correctAnswers.find((opt: { text: string }) => opt.text === userOpt)
+          ) {
+            correctMatches++;
+          } else {
+            correctMatches--;
+          }
+        });
+
+        const totalCorrect = correctAnswers.length;
+
+        if (totalCorrect > 0) {
+          const rawScore = correctMatches / totalCorrect;
+          score = Math.max(0, Math.min(1, rawScore));
+          is_correct = score === 1 && userSelectedTexts.size === totalCorrect;
+        } else {
+          score = 0;
+          is_correct = false;
+        }
+      } else if (
+        question.question_type === 'ESSAY' &&
+        question.correct_answer
+      ) {
+        if (!submitQuestionDto.answer) {
+          throw new BadRequestException('Answer is required');
+        }
+        is_correct = submitQuestionDto.answer === question.correct_answer;
+        score = is_correct ? 1 : 0;
+      }
+
+      const submissionQuestion = await tx.submissionQuestions.upsert({
         where: {
           submission_id_question_id: {
             submission_id: submitQuestionDto.submission_id,
@@ -228,17 +247,17 @@ export class SubmissionService {
         },
       });
 
+      return {
+        questionId: submissionQuestion.id,
+        examId: submission.exam_id,
+        submissionId: submission.id,
+      };
+    });
     await this.prisma.afterCommit(() =>
-      this.monitor.markDirty(submission.exam_id, submission.id),
+      this.monitor.markDirty(result.examId, result.submissionId),
     );
-
-    return {
-      data: {
-        submission_question_id: submissionQuestion.id,
-      },
-    };
+    return { data: { submission_question_id: result.questionId } };
   }
-
   async submitByExam(submitExamDto: SubmitExamDto, studentId?: string) {
     if (!submitExamDto.submission_id) {
       throw new BadRequestException('Submission id is required');

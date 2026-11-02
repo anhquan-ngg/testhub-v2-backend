@@ -5,7 +5,8 @@ import { ExamRuntimeEventsService } from './exam-runtime-events.service';
 import { ExamRuntimeQueueService } from './exam-runtime-queue.service';
 import { ExamMonitorAggregator } from './exam-monitor-aggregator.service';
 import { NotificationGateway } from '@/notification/notification.gateway';
-import { ExamMode } from '@prisma/client';
+import { ExamMode, Prisma, QuestionFormat, QuestionType } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 describe('ExamRuntimeService', () => {
   let service: ExamRuntimeService;
@@ -16,7 +17,14 @@ describe('ExamRuntimeService', () => {
       question: {
         findMany: jest.fn(),
       },
+      $transaction: jest.fn(),
+      $queryRaw: jest.fn((query: Prisma.Sql) =>
+        Promise.resolve(query.values.map((id: unknown) => ({ id }))),
+      ),
     };
+    mockPrismaService.$transaction.mockImplementation(
+      (callback: (tx: unknown) => unknown) => callback(mockPrismaService),
+    );
 
     Object.defineProperty(mockPrismaService, 'current', {
       get: () => mockPrismaService,
@@ -52,8 +60,11 @@ describe('ExamRuntimeService', () => {
     prismaService = module.get<PrismaService>(PrismaService);
   });
 
+  afterEach(() => jest.restoreAllMocks());
+
   describe('selectQuestions (ExamMode.RANDOM_N)', () => {
     it('should query matching question IDs, pick random ones, and query full question details', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0);
       const examData = {
         id: 'exam-id',
         topic_id: 'topic-id',
@@ -79,8 +90,8 @@ describe('ExamRuntimeService', () => {
           files: [],
         },
         {
-          id: 'q3',
-          question_text: 'Question 3',
+          id: 'q2',
+          question_text: 'Question 2',
           options: 'options3',
           question_type: 'SINGLE_CHOICE',
           question_format: 'TEXT',
@@ -161,6 +172,174 @@ describe('ExamRuntimeService', () => {
       ).rejects.toThrow();
 
       expect(findManyMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('startExam question selection', () => {
+    function setupSelection(mode: ExamMode, deleted = false, resume = false) {
+      const id = randomUUID();
+      const chapterId = randomUUID();
+      const events: string[] = [];
+      const question = {
+        id,
+        question_text: 'Fixture',
+        options: null,
+        question_type: QuestionType.SINGLE_CHOICE,
+        question_format: QuestionFormat.KNOWLEDGE,
+        files: [],
+      };
+      const exam = {
+        id: randomUUID(),
+        topic_id: randomUUID(),
+        mode,
+        sample_size: 1,
+        duration: 30,
+        exam_end_time: new Date(Date.now() + 3600000),
+        distribution: JSON.stringify(
+          mode === ExamMode.BY_CHAPTER
+            ? [{ chapter_id: chapterId.toUpperCase(), quantity: 1 }]
+            : [
+                {
+                  question_type: question.question_type,
+                  question_format: question.question_format,
+                  quantity: 1,
+                },
+              ],
+        ),
+      };
+      const tx = {
+        submission: {
+          create: jest.fn().mockResolvedValue({ id: 'submission' }),
+        },
+        examQuestions: {
+          findMany: jest.fn().mockResolvedValue([{ question_id: id }]),
+        },
+        question: {
+          findMany: jest.fn((args: { select: { question_text?: boolean } }) => {
+            if (!args.select.question_text) return Promise.resolve([{ id }]);
+            events.push('hydrate');
+            expect(events).toContain('lock');
+            return Promise.resolve([question]);
+          }),
+        },
+        $queryRaw: jest.fn((query: Prisma.Sql | TemplateStringsArray) => {
+          if ('sql' in query && query.sql.includes('FOR SHARE')) {
+            events.push('lock');
+            expect(query.sql).toContain('is_deleted = false');
+            expect(query.sql).toContain('ORDER BY id FOR SHARE');
+            expect(query.values).toEqual([id]);
+            return Promise.resolve(deleted ? [] : [{ id }]);
+          }
+          return Promise.resolve(
+            mode === ExamMode.BY_CHAPTER
+              ? [{ chapter_id: chapterId, question_id: id }]
+              : [{ id }],
+          );
+        }),
+        submissionQuestions: {
+          count: jest.fn().mockResolvedValue(0),
+          createMany: jest.fn(() => {
+            events.push('persist');
+            return Promise.resolve({ count: 1 });
+          }),
+        },
+        examSession: { upsert: jest.fn().mockResolvedValue({}) },
+      };
+      const internals = service as unknown as {
+        findExam: () => Promise<unknown>;
+        assertCanAccessExam: () => Promise<void>;
+        findInProgressSubmission: () => Promise<unknown>;
+        assertRetakeAllowed: () => Promise<unknown>;
+        assertWithinStartWindow: () => void;
+        formatSubmissionExam: () => Promise<unknown>;
+        touchSession: () => Promise<unknown>;
+        queue: { scheduleAutoSubmit: () => Promise<void> };
+      };
+      jest.spyOn(internals, 'findExam').mockResolvedValue(exam);
+      jest.spyOn(internals, 'assertCanAccessExam').mockResolvedValue(undefined);
+      jest
+        .spyOn(internals, 'findInProgressSubmission')
+        .mockResolvedValue(resume ? { id: 'submission' } : null);
+      jest.spyOn(internals, 'assertRetakeAllowed').mockResolvedValue(null);
+      jest
+        .spyOn(internals, 'assertWithinStartWindow')
+        .mockImplementation(() => {});
+      jest.spyOn(internals, 'formatSubmissionExam').mockResolvedValue({});
+      jest.spyOn(internals, 'touchSession').mockResolvedValue({});
+      jest.spyOn(service, 'emitActiveCount').mockResolvedValue(undefined);
+      internals.queue.scheduleAutoSubmit = jest
+        .fn()
+        .mockResolvedValue(undefined);
+      const root = prismaService as unknown as {
+        $transaction: jest.Mock;
+        $queryRaw: jest.Mock;
+        question: { findMany: jest.Mock };
+      };
+      const transaction = root.$transaction;
+      transaction.mockImplementation(
+        async (action: (db: typeof tx) => Promise<unknown>) => {
+          try {
+            const result = await action(tx);
+            events.push('commit');
+            return result;
+          } catch (error) {
+            events.push('rollback');
+            throw error;
+          }
+        },
+      );
+      return { id, exam, tx, events, transaction, root };
+    }
+
+    it.each([
+      ExamMode.MANUAL,
+      ExamMode.RANDOM_N,
+      ExamMode.BY_TYPE,
+      ExamMode.BY_CHAPTER,
+    ])(
+      '%s selects, locks, hydrates and persists on the same transaction',
+      async (mode) => {
+        const { id, exam, tx, events, transaction, root } =
+          setupSelection(mode);
+        await service.startExam(exam.id, 'student');
+        expect(events).toEqual(['lock', 'hydrate', 'persist', 'commit']);
+        expect(transaction).toHaveBeenCalledTimes(1);
+        expect(root.question.findMany).not.toHaveBeenCalled();
+        expect(root.$queryRaw).not.toHaveBeenCalled();
+        expect(tx.submissionQuestions.createMany).toHaveBeenCalledWith({
+          data: [{ submission_id: 'submission', question_id: id, order: 0 }],
+          skipDuplicates: true,
+        });
+      },
+    );
+
+    it.each([
+      ExamMode.MANUAL,
+      ExamMode.RANDOM_N,
+      ExamMode.BY_TYPE,
+      ExamMode.BY_CHAPTER,
+    ])(
+      '%s refuses a question deleted before its lock is acquired',
+      async (mode) => {
+        const { exam, tx, events } = setupSelection(mode, true);
+        await expect(service.startExam(exam.id, 'student')).rejects.toThrow(
+          'Question bank changed',
+        );
+        expect(events).toEqual(['lock', 'rollback']);
+        expect(tx.submissionQuestions.createMany).not.toHaveBeenCalled();
+        expect(tx.examSession.upsert).not.toHaveBeenCalled();
+      },
+    );
+
+    it('also uses a transaction when restoring a submission without question slots', async () => {
+      const { exam, events, transaction } = setupSelection(
+        ExamMode.BY_CHAPTER,
+        false,
+        true,
+      );
+      await service.startExam(exam.id, 'student');
+      expect(events).toEqual(['lock', 'hydrate', 'persist', 'commit']);
+      expect(transaction).toHaveBeenCalledTimes(1);
     });
   });
 

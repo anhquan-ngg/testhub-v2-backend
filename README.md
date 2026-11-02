@@ -1,5 +1,20 @@
 # TestHub V2 - Backend System
 
+## Manual submission regrading
+
+Lecturers can save private per-question drafts and explicitly publish /10 results,
+with an atomic audit and in-app student notification. Requires the additive
+`20261029110000_add_submission_regrading` migration (not applied automatically).
+Deploy API and grade workers together; legacy PATCH no longer changes grades or
+completed attempts. See [workflow, API, rollout and tests](docs/manual-regrading.md).
+
+## Chapter hierarchy (2026-10-27)
+
+Adjacency List + Recursive CTE support arbitrary-depth chapter trees. BY_CHAPTER
+includes every descendant and allocates globally distinct questions across
+overlapping rows. No schema change or migration is required. See
+[chapter hierarchy, API and tests](docs/chapter-hierarchy.md).
+
 ## Background dev processes (2026-10-25)
 
 - npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.

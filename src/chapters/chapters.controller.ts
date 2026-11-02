@@ -68,6 +68,41 @@ export class ChaptersController {
     return this.chaptersService.findOne(id, toActor(req));
   }
 
+  @Get(':id/subtree')
+  @ApiOperation({
+    summary:
+      'Read the chapter and all active descendants, at any depth (flat paginated adjacency list)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{data,total,page,limit}; includes root; stable order/id sorting',
+  })
+  subtree(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: QueryChapterDto,
+    @Req() req: Request,
+  ) {
+    return this.chaptersService.hierarchy(id, 'subtree', query, toActor(req));
+  }
+
+  @Get(':id/ancestors')
+  @ApiOperation({
+    summary:
+      'Read active ancestors and the selected chapter as a flat paginated list',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{data,total,page,limit}; reconstruct order using parent_id',
+  })
+  ancestors(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: QueryChapterDto,
+    @Req() req: Request,
+  ) {
+    return this.chaptersService.hierarchy(id, 'ancestors', query, toActor(req));
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: 'Update a chapter' })
   @ApiResponse({ status: 404, description: 'Chapter not found.' })
