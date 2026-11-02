@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
+import {
+  MAX_DISTRIBUTION_QUESTIONS,
+  MAX_QUESTION_DISTRIBUTION_ROWS,
+  MAX_QUESTIONS_PER_DISTRIBUTION_ROW,
+} from './question-distribution.constants';
 import {
   allocateChapterQuestions,
   parseChapterDistribution,
+  selectChapterQuestionIds,
 } from './chapter-question-selection';
 
 describe('Chapter distribution matching', () => {
@@ -47,6 +54,77 @@ describe('Chapter distribution matching', () => {
   it('keeps persisted legacy JSON shape and ordered quotas', () => {
     const rows = [row(2), row(3)];
     expect(parseChapterDistribution(JSON.stringify(rows))).toEqual(rows);
+  });
+  it('preserves row-count, per-row and total-question limits', () => {
+    expect(
+      parseChapterDistribution([row(MAX_QUESTIONS_PER_DISTRIBUTION_ROW)]),
+    ).toHaveLength(1);
+    expect(() =>
+      parseChapterDistribution([row(MAX_QUESTIONS_PER_DISTRIBUTION_ROW + 1)]),
+    ).toThrow();
+    expect(
+      parseChapterDistribution(
+        Array.from({ length: MAX_QUESTION_DISTRIBUTION_ROWS }, () => row()),
+      ),
+    ).toHaveLength(MAX_QUESTION_DISTRIBUTION_ROWS);
+    expect(() =>
+      parseChapterDistribution(
+        Array.from({ length: MAX_QUESTION_DISTRIBUTION_ROWS + 1 }, () => row()),
+      ),
+    ).toThrow(
+      `max ${MAX_QUESTION_DISTRIBUTION_ROWS} rows / ${MAX_DISTRIBUTION_QUESTIONS} questions`,
+    );
+    const half = Math.floor(MAX_DISTRIBUTION_QUESTIONS / 2);
+    expect(
+      parseChapterDistribution([
+        row(half),
+        row(MAX_DISTRIBUTION_QUESTIONS - half),
+      ]),
+    ).toHaveLength(2);
+    expect(() =>
+      parseChapterDistribution([
+        row(half),
+        row(MAX_DISTRIBUTION_QUESTIONS - half + 1),
+      ]),
+    ).toThrow();
+  });
+  it('shares candidates for repeated chapter UUIDs regardless of case', async () => {
+    const chapter = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const $queryRaw = jest
+      .fn<
+        Promise<Array<{ chapter_id: string; question_id: string }>>,
+        [Prisma.Sql]
+      >()
+      .mockResolvedValue([
+        { chapter_id: chapter, question_id: 'first' },
+        { chapter_id: chapter, question_id: 'second' },
+      ]);
+    const db = { $queryRaw } as unknown as Prisma.TransactionClient;
+    const ids = await selectChapterQuestionIds(db, randomUUID(), [
+      { chapter_id: chapter.toUpperCase(), quantity: 1 },
+      { chapter_id: chapter, quantity: 1 },
+    ]);
+    expect(new Set(ids)).toEqual(new Set(['first', 'second']));
+    const query = $queryRaw.mock.calls[0][0];
+    expect(query.sql).toContain(
+      "SELECT DISTINCT (item->>'chapter_id')::uuid chapter_id",
+    );
+    expect(query.sql).toContain('subtree(chapter_id,id)');
+    expect(query.sql).not.toContain('row_index');
+    expect($queryRaw).toHaveBeenCalledTimes(1);
+  });
+  it('keeps empty chapter candidates insufficient', async () => {
+    const chapter = randomUUID();
+    const db = {
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValue([{ chapter_id: chapter, question_id: null }]),
+    } as unknown as Prisma.TransactionClient;
+    await expect(
+      selectChapterQuestionIds(db, randomUUID(), [
+        { chapter_id: chapter, quantity: 1 },
+      ]),
+    ).rejects.toThrow('Not enough distinct');
   });
   it('agrees with exhaustive feasibility on all small overlapping candidate graphs', () => {
     const rows = [row(), row(), row()];

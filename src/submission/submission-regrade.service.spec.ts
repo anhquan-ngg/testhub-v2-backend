@@ -124,6 +124,26 @@ describe('Submission regrading portable validation and service guards', () => {
     );
   });
 
+  it.each(['saveDraft', 'publish'] as const)(
+    '%s locks the submission for update and shares the exam lock',
+    async (operation) => {
+      const { service, id, owner, body, tx, row } = setup();
+      if (operation === 'saveDraft') {
+        await service.saveDraft(id, owner, body);
+      } else {
+        row.regradePublications = [{ revision: 1 }];
+        await service.publish(id, owner, { revision: 1 });
+      }
+      expect(tx.$queryRaw).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.stringContaining('FOR UPDATE OF s FOR SHARE OF e'),
+        ]),
+        id,
+        owner,
+      );
+    },
+  );
+
   it('rejects unowned, unfinished and empty submissions before saving', async () => {
     const { service, id, owner, body, tx, row } = setup();
     tx.$queryRaw.mockResolvedValueOnce([]);

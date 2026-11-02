@@ -68,8 +68,10 @@ response is the current workspace, not necessarily the old publication snapshot.
 
 `Submission.grading_revision` fences the public grade. The private draft and
 append-only publication records live in separate tables. Saving and publishing
-lock the submission and owning exam, then recheck ownership/status and revisions.
-Concurrent saves cannot silently replace one another.
+lock the submission with `FOR UPDATE` and its owning exam with `FOR SHARE`, then
+recheck ownership/status and revisions. The exam lock prevents updates/deletion
+while allowing foreign-key `FOR KEY SHARE` locks and other `FOR SHARE` readers.
+Concurrent saves of the same submission cannot silently replace one another.
 
 Publication writes question scores, total/rating, grade revision, audit, published
 draft marker and one durable notification in the **same PostgreSQL transaction**.

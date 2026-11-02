@@ -1359,53 +1359,38 @@ export class ExamRuntimeService implements OnModuleInit {
    * fresh draw. Public so the offline print flow (ExamPrintService) builds
    * its variants from exactly the same selection rules as online attempts.
    */
-  async selectQuestions(examData: {
-    id: string;
-    topic_id: string;
-    mode: ExamMode;
-    sample_size: number | null;
-    distribution: string | null;
-  }) {
+  async selectQuestions(
+    examData: {
+      id: string;
+      topic_id: string;
+      mode: ExamMode;
+      sample_size: number | null;
+      distribution: string | null;
+    },
+    db?: Prisma.TransactionClient,
+  ): Promise<ExamQuestionRow[]> {
+    if (!db) {
+      return this.prisma.inTransaction((tx) =>
+        this.selectQuestions(examData, tx),
+      );
+    }
     let questions: ExamQuestionRow[] = [];
 
     if (examData.mode === ExamMode.MANUAL) {
-      const examQuestions = await this.prisma.current.examQuestions.findMany({
+      const examQuestions = await db.examQuestions.findMany({
         where: {
           exam_id: examData.id,
           is_deleted: false,
           question: { is_deleted: false },
         },
-        include: {
-          question: {
-            select: {
-              id: true,
-              question_text: true,
-              options: true,
-              question_type: true,
-              question_format: true,
-              files: {
-                orderBy: { order: 'asc' },
-                select: {
-                  order: true,
-                  file: {
-                    select: { id: true, url: true, name: true, type: true },
-                  },
-                },
-              },
-            },
-          },
-        },
+        select: { question_id: true },
       });
-      questions = examQuestions.map((eq) => ({
-        ...(eq.question as any),
-        files:
-          (eq.question as any).files?.map((qf: any) => ({
-            ...qf.file,
-            order: qf.order,
-          })) ?? [],
-      })) as ExamQuestionRow[];
+      questions = await this.hydrateSelectedQuestions(
+        examQuestions.map((row) => ({ id: row.question_id })),
+        db,
+      );
     } else if (examData.mode === ExamMode.RANDOM_N) {
-      const questionIdsRows = await this.prisma.current.question.findMany({
+      const questionIdsRows = await db.question.findMany({
         where: {
           is_deleted: false,
           chapter: {
@@ -1434,31 +1419,10 @@ export class ExamRuntimeService implements OnModuleInit {
       const selectedIds = shuffled.slice(0, limit);
 
       if (selectedIds.length > 0) {
-        const questionRows = await this.prisma.current.question.findMany({
-          where: {
-            id: { in: selectedIds },
-          },
-          select: {
-            id: true,
-            question_text: true,
-            options: true,
-            question_type: true,
-            question_format: true,
-            files: {
-              orderBy: { order: 'asc' },
-              select: {
-                order: true,
-                file: {
-                  select: { id: true, url: true, name: true, type: true },
-                },
-              },
-            },
-          },
-        });
-        questions = questionRows.map((q) => ({
-          ...q,
-          files: (q.files ?? []).map((qf) => ({ ...qf.file, order: qf.order })),
-        })) as ExamQuestionRow[];
+        questions = await this.hydrateSelectedQuestions(
+          selectedIds.map((id) => ({ id })),
+          db,
+        );
       }
       this.assertEnoughQuestions(
         questions.length,
@@ -1479,13 +1443,8 @@ export class ExamRuntimeService implements OnModuleInit {
       const byTypeResults = await Promise.all(
         parsedDistribution.map(
           (distribution) =>
-            this.prisma.current.$queryRaw<ExamQuestionRow[]>`
-            SELECT
-              q.id,
-              q.question_text,
-              q.options,
-              q.question_type,
-              q.question_format
+            db.$queryRaw<Array<{ id: string }>>`
+            SELECT q.id
             FROM "questions" AS q
             INNER JOIN "chapters" AS c ON c.id = q.chapter_id
             WHERE c.topic_id = ${examData.topic_id}
@@ -1506,35 +1465,20 @@ export class ExamRuntimeService implements OnModuleInit {
           `BY_TYPE (${parsedDistribution[i].question_type}/${parsedDistribution[i].question_format})`,
         );
       }
-      const enrichedByType = await this.enrichQuestionsWithFiles(flatByType);
+      const enrichedByType = await this.hydrateSelectedQuestions(
+        flatByType,
+        db,
+      );
       questions.push(...enrichedByType);
     } else if (examData.mode === ExamMode.BY_CHAPTER) {
       const ids = await selectChapterQuestionIds(
-        this.prisma.current,
+        db,
         examData.topic_id,
         examData.distribution,
       );
-      const rows = await this.prisma.current.question.findMany({
-        where: { id: { in: ids }, is_deleted: false },
-        select: {
-          id: true,
-          question_text: true,
-          options: true,
-          question_type: true,
-          question_format: true,
-        },
-      });
-      if (rows.length !== ids.length)
-        throw new BadRequestException(
-          'Question bank changed during selection; retry',
-        );
-      const byId = new Map(rows.map((row) => [row.id, row]));
-      questions.push(
-        ...(await this.enrichQuestionsWithFiles(
-          ids
-            .map((id) => byId.get(id))
-            .filter((row): row is NonNullable<typeof row> => Boolean(row)),
-        )),
+      questions = await this.hydrateSelectedQuestions(
+        ids.map((id) => ({ id })),
+        db,
       );
     }
 
@@ -1545,15 +1489,31 @@ export class ExamRuntimeService implements OnModuleInit {
     return questions;
   }
 
-  private async enrichQuestionsWithFiles(
-    rows: Omit<ExamQuestionRow, 'files'>[],
+  private async hydrateSelectedQuestions(
+    rows: { id: string }[],
+    db: Prisma.TransactionClient,
   ): Promise<ExamQuestionRow[]> {
     if (rows.length === 0) return [];
-    const ids = rows.map((q) => q.id);
-    const withFiles = await this.prisma.current.question.findMany({
-      where: { id: { in: ids } },
+    const ids = [...new Set(rows.map((q) => q.id))];
+    // SHARE blocks soft deletion as well as hard deletion until the attempt commits.
+    const locked = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM questions
+      WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+        AND is_deleted = false
+      ORDER BY id FOR SHARE
+    `);
+    if (locked.length !== ids.length)
+      throw new BadRequestException(
+        'Question bank changed during selection; retry',
+      );
+    const withFiles = await db.question.findMany({
+      where: { id: { in: ids }, is_deleted: false },
       select: {
         id: true,
+        question_text: true,
+        options: true,
+        question_type: true,
+        question_format: true,
         files: {
           orderBy: { order: 'asc' },
           select: {
@@ -1565,13 +1525,18 @@ export class ExamRuntimeService implements OnModuleInit {
         },
       },
     });
-    const filesById = new Map(
-      withFiles.map((q) => [
-        q.id,
-        q.files.map((qf) => ({ ...qf.file, order: qf.order })),
-      ]),
-    );
-    return rows.map((q) => ({ ...q, files: filesById.get(q.id) ?? [] }));
+    const byId = new Map(withFiles.map((question) => [question.id, question]));
+    return rows.map(({ id }) => {
+      const question = byId.get(id);
+      if (!question)
+        throw new BadRequestException(
+          'Question bank changed during selection; retry',
+        );
+      return {
+        ...question,
+        files: question.files.map((qf) => ({ ...qf.file, order: qf.order })),
+      };
+    });
   }
 
   private async ensureSubmissionQuestions(
@@ -1583,8 +1548,13 @@ export class ExamRuntimeService implements OnModuleInit {
       sample_size: number | null;
       distribution: string | null;
     },
-    db: Prisma.TransactionClient = this.prisma.current,
-  ) {
+    db?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (!db) {
+      return this.prisma.inTransaction((tx) =>
+        this.ensureSubmissionQuestions(submissionId, examData, tx),
+      );
+    }
     const existingCount = await db.submissionQuestions.count({
       where: { submission_id: submissionId },
     });
@@ -1593,7 +1563,7 @@ export class ExamRuntimeService implements OnModuleInit {
       return;
     }
 
-    const questions = await this.selectQuestions(examData);
+    const questions = await this.selectQuestions(examData, db);
     const orderedQuestions = this.shuffleArray(questions);
 
     await db.submissionQuestions.createMany({

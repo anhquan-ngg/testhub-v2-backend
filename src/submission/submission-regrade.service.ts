@@ -193,7 +193,7 @@ export class SubmissionRegradeService {
       SELECT s.id FROM submissions s JOIN exams e ON e.id = s.exam_id
       WHERE s.id = ${id}::uuid AND e.lecturer_id = ${lecturerId}::uuid
         AND s.is_deleted = false AND e.is_deleted = false
-      FOR UPDATE OF s, e
+      FOR UPDATE OF s FOR SHARE OF e
     `;
     if (!rows.length) throw new NotFoundException('Submission not found');
   }

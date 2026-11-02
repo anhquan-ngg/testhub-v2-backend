@@ -51,8 +51,10 @@ cho chỉ chương và con trực tiếp. Cho phép đồng thời chọn A và 
 thậm chí lặp lại một chương, nhưng một câu hỏi chỉ xuất hiện một lần trong kết
 quả chung của các dòng. Câu hỏi xóa mềm không được chọn.
 
-Truy vấn CTE đọc tập ứng viên của tất cả dòng trong một SQL snapshot. Bộ phân
-bổ dùng ghép cặp hai phía với đường tăng, thực hiện bằng vòng lặp. Ví dụ A có
+Truy vấn CTE đọc tập ứng viên trong một SQL snapshot, mở rộng cây con một lần
+cho mỗi UUID chương phân biệt. Các dòng lặp chương dùng chung mảng ứng viên;
+UUID được chuẩn hóa chữ thường khi tra cứu, nhưng thứ tự và hạn ngạch từng dòng
+vẫn được giữ nguyên. Bộ phân bổ dùng ghép cặp hai phía với đường tăng, thực hiện bằng vòng lặp. Ví dụ A có
 `q1, q2`, B chỉ có `q1`, mỗi dòng yêu cầu một câu: kết quả là A nhận `q2`, B nhận
 `q1`. Việc lấy ngẫu nhiên độc lập từng dòng có thể chọn trùng `q1`; cách lấy
 tham lam rồi loại trùng có thể báo thiếu dù tồn tại cách phân bổ đủ.
@@ -68,6 +70,14 @@ tối đa 10.000 câu. Đây là giới hạn kích thước cấu hình, không
 JSON sai cấu trúc, UUID sai, số lượng dạng chuỗi/âm hoặc cấu hình rỗng bị từ chối.
 Cấu hình cũ hợp lệ giữ nguyên UUID/số lượng và nhận ngữ nghĩa toàn bộ cây con.
 Cấu hình cũ không hợp lệ cần giảng viên sửa trước khi lưu/chọn đề tiếp.
+Các giới hạn mỗi dòng, số dòng và tổng số câu được khai báo tập trung tại
+`src/common/question-distribution.constants.ts`; giá trị và thông báo lỗi không đổi.
+
+Khi bắt đầu hoặc khôi phục phiên chưa có câu hỏi, chọn ID, khóa câu hỏi, tải dữ
+liệu và ghi các slot diễn ra trong cùng transaction. Khóa `FOR SHARE` theo thứ tự
+ID ngăn xóa mềm/cứng các câu đã chọn cho tới commit. Nếu một câu đã bị xóa trước
+khi lấy khóa, yêu cầu thất bại và rollback thay vì ghi đề thiếu hoặc chứa câu đã
+xóa. Các chế độ MANUAL, RANDOM_N, BY_TYPE và BY_CHAPTER dùng chung bước này.
 Danh sách câu đã được chốt trong phiên thi đang diễn ra không được viết lại.
 
 ## Frontend
@@ -82,7 +92,7 @@ hiển thị, không cắt cây dữ liệu. Import cũng dựng đường dẫn
 Chạy tại backend:
 
 ```powershell
-npx jest common/chapter-question-selection.spec.ts --runInBand
+npx jest --runInBand --runTestsByPath src\common\chapter-question-selection.spec.ts src\exam-runtime\exam-runtime.service.spec.ts
 # Chỉ trỏ tới PostgreSQL loopback riêng cho test, tên database kết thúc bằng _test:
 $env:TESTHUB_TREE_DATABASE_URL='postgresql://postgres:fixture-only@127.0.0.1:55444/chapter_tree_test'
 npx jest chapters/chapter-tree.integration.spec.ts --runInBand
