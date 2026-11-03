@@ -28,6 +28,7 @@ import { ExamsController } from '../exams/exams.controller';
 import { ExamsService } from '../exams/exams.service';
 import { ExamsRepository } from '../exams/exams.repository';
 import { PdfService } from '../submission/pdf.service';
+import type { S3Service } from '../s3/s3.service';
 import * as puppeteer from 'puppeteer';
 import type { Browser, Page } from 'puppeteer';
 
@@ -300,6 +301,7 @@ const url = process.env.TESTHUB_TREE_DATABASE_URL;
       try {
         const result = await new PdfService(
           prisma as unknown as PrismaService,
+          {} as unknown as S3Service,
         ).generateBlankExamPdf(saved.id);
         expect(result.toString()).toBe('fixture-pdf');
         for (const depth of [0, 1, 3, 60, 999])
