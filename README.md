@@ -95,6 +95,16 @@ existing tokens require login again. See [auth session setup and contract](docs/
 - Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
   limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
 
+## Submission result PDF concurrency
+
+`PdfService.generateSubmissionPdf` uses two independent, process-wide FIFO limits:
+media/view/HTML preparation allows 2 active requests and 4 waiters, while Chromium
+rendering retains its existing 2 active requests and 4 waiters. Preparation releases
+its permit before entering the render queue; S3 downloads never hold render permits.
+A full queue in either stage returns HTTP 503. Limits apply per process, not across
+replicas. Per-submission media fan-out, the 5 MiB image limit and missing-image
+fallback remain unchanged. Offline regressions: `npx jest --runInBand pdf.service.spec`.
+
 ## Tài liệu học tập — PDF/PPTX và trích xuất nền
 
 Module `src/learning-documents/` có metadata/phiên bản riêng, presigned upload,
