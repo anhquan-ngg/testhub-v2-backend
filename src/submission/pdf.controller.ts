@@ -29,23 +29,34 @@ export class PdfController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    const user = (req as any).user;
+    const user = (req as Request & { user?: { id: string; role: string } })
+      .user;
 
     if (!user) {
       throw new ForbiddenException('User not authenticated');
     }
 
-    // Check permissions: ADMIN, LECTURER, or Owner (Student)
-    if (user.role !== 'ADMIN' && user.role !== 'LECTURER') {
-      const ownerId = await this.submissionService.getSubmissionOwner(id);
-      if (!ownerId || ownerId !== user.id) {
-        throw new ForbiddenException(
-          'Only admins, lecturers, and the submission owner can download PDFs',
-        );
-      }
+    // ADMIN: any submission; LECTURER: only submissions of exams they own;
+    // anyone else: only their own submission.
+    const access = await this.pdfService.getSubmissionAccessInfo(id);
+    const isStaff = user.role === 'ADMIN' || user.role === 'LECTURER';
+    if (user.role === 'LECTURER' && access.lecturerId !== user.id) {
+      throw new ForbiddenException(
+        'Lecturers can only download submissions of their own exams',
+      );
+    }
+    if (!isStaff && access.studentId !== user.id) {
+      throw new ForbiddenException(
+        'Only admins, the exam lecturer, and the submission owner can download PDFs',
+      );
     }
 
-    const pdfBuffer = await this.pdfService.generateSubmissionPdf(id);
+    // Students only see the per-question breakdown for practice exams,
+    // matching the web result page.
+    const pdfBuffer = await this.pdfService.generateSubmissionPdf(id, {
+      showQuestions: isStaff || access.practice,
+      staffView: isStaff,
+    });
 
     res.set({
       'Content-Type': 'application/pdf',

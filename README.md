@@ -1,5 +1,21 @@
 # TestHub V2 - Backend System
 
+## One-command local AI backend (Docker Compose)
+
+With the existing local DB/RAG schema, backend `.env` and host Python AI ready:
+
+```powershell
+docker compose --profile generation up -d --build
+```
+
+Starts PostgreSQL/Redis, the Nest API, AI worker and document/indexing worker.
+Python and frontend still run separately. Stop host API/workers first (for the
+PM2 dev group, `npm run dev:down`); container URLs differ from host loopback.
+No migrations or seeds run automatically. Existing Postgres image/volumes remain
+unchanged; pgvector must already be installed. See
+[setup, environment mapping, logs and stop commands](docs/docker-generation.md).
+Default `docker compose up -d` still starts only PostgreSQL/Redis.
+
 ## Manual submission regrading
 
 Lecturers can save private per-question drafts and explicitly publish /10 results,

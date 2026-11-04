@@ -2,307 +2,354 @@ import { selectChapterQuestionIds } from '../common/chapter-question-selection';
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import { FileType, Prisma } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
+import { S3Service } from '@/s3/s3.service';
+import { isAllowedPrintRequest } from '@/exam-print/exam-print.network';
+import {
+  PRINT_READY_FLAG,
+  escapeHtml,
+} from '@/exam-print/exam-print.templates';
 import * as puppeteer from 'puppeteer';
+import {
+  renderSubmissionPdfHtml,
+  type SubmissionPdfMedia,
+  type SubmissionPdfOption,
+  type SubmissionPdfQuestion,
+  type SubmissionPdfView,
+} from './submission-pdf.template';
 
-@Injectable()
-export class PdfService {
-  constructor(private readonly prisma: PrismaService) {}
+export type SubmissionPdfOptions = {
+  /** Render the per-question breakdown (staff, or practice exams). */
+  showQuestions: boolean;
+  /** Use staff wording ("Câu trả lời của thí sinh") instead of "Câu trả lời của bạn". */
+  staffView: boolean;
+};
 
-  async generateSubmissionPdf(submissionId: string): Promise<Buffer> {
-    const submission = await this.prisma.submission.findUnique({
-      where: { id: submissionId },
-      include: {
-        exam: {
-          include: {
-            _count: {
-              select: {
-                questions: true,
-              },
-            },
-          },
-        },
-        student: true,
-        questions: {
-          include: {
-            question: {
-              select: {
-                id: true,
-                question_text: true,
-                question_type: true,
-                options: true,
-                correct_answer: true,
+export type SubmissionAccessInfo = {
+  studentId: string;
+  lecturerId: string;
+  practice: boolean;
+};
+
+const PAGE_LOAD_TIMEOUT_MS = 45_000;
+const MATH_READY_TIMEOUT_MS = 15_000;
+const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+};
+
+/** Minimal FIFO counting semaphore bounding concurrent Chromium instances. */
+class Semaphore {
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(
+    private available: number,
+    private readonly maxWaiters: number,
+  ) {}
+
+  async run<T>(task: () => Promise<T>): Promise<T> {
+    if (this.available > 0) {
+      this.available--;
+    } else {
+      if (this.waiters.length >= this.maxWaiters) {
+        throw new ServiceUnavailableException(
+          'PDF queue is full; try again later',
+        );
+      }
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    try {
+      return await task();
+    } finally {
+      const next = this.waiters.shift();
+      if (next) next();
+      else this.available++;
+    }
+  }
+}
+
+const submissionPdfSlots = new Semaphore(2, 4);
+
+const submissionPdfInclude = {
+  exam: {
+    include: {
+      topic: { select: { name: true } },
+      _count: { select: { questions: true } },
+    },
+  },
+  student: { select: { full_name: true, email: true } },
+  questions: {
+    where: { is_deleted: false },
+    orderBy: [{ order: 'asc' }, { created_at: 'asc' }],
+    include: {
+      question: {
+        select: {
+          question_text: true,
+          question_type: true,
+          options: true,
+          correct_answer: true,
+          files: {
+            orderBy: { order: 'asc' },
+            select: {
+              file: {
+                select: {
+                  id: true,
+                  name: true,
+                  url: true,
+                  s3_key: true,
+                  type: true,
+                },
               },
             },
           },
         },
       },
-    });
+    },
+  },
+} satisfies Prisma.SubmissionInclude;
 
+type SubmissionForPdf = Prisma.SubmissionGetPayload<{
+  include: typeof submissionPdfInclude;
+}>;
+
+type PdfFile =
+  SubmissionForPdf['questions'][number]['question']['files'][number]['file'];
+
+type ParsedOption = { text: string; isCorrect: boolean };
+
+@Injectable()
+export class PdfService {
+  private readonly logger = new Logger(PdfService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly s3: S3Service,
+  ) {}
+
+  /** Returns the ownership facts needed to authorize a submission PDF download. */
+  async getSubmissionAccessInfo(
+    submissionId: string,
+  ): Promise<SubmissionAccessInfo> {
+    const submission = await this.prisma.submission.findFirst({
+      where: { id: submissionId, is_deleted: false },
+      select: {
+        student_id: true,
+        exam: { select: { lecturer_id: true, practice: true } },
+      },
+    });
+    if (!submission) {
+      throw new NotFoundException('Submission not found');
+    }
+    return {
+      studentId: submission.student_id,
+      lecturerId: submission.exam.lecturer_id,
+      practice: submission.exam.practice,
+    };
+  }
+
+  /**
+   * Renders a submission's detailed result as an A4 PDF whose layout mirrors
+   * the web result view. Each question card is kept on a single page.
+   */
+  async generateSubmissionPdf(
+    submissionId: string,
+    options: SubmissionPdfOptions,
+  ): Promise<Buffer> {
+    const submission = await this.prisma.submission.findFirst({
+      where: { id: submissionId, is_deleted: false },
+      include: submissionPdfInclude,
+    });
     if (!submission) {
       throw new NotFoundException('Submission not found');
     }
 
-    const getDistributionQuestions = (distributions: any) => {
-      if (!distributions) return 0;
-      const parsedDistribution = JSON.parse(distributions);
-      let res = 0;
-      for (let i = 0; i < parsedDistribution.length; i++) {
-        res += parsedDistribution[i].quantity;
-      }
-      return res;
-    };
-
-    const calculateTotalQuestions = (sub: typeof submission): number => {
-      // @ts-ignore
-      const mode = sub.exam.mode;
-      switch (mode) {
-        case 'RANDOM_N':
-          // @ts-ignore
-          return sub.exam.sample_size;
-        case 'BY_TYPE':
-        case 'BY_CHAPTER':
-          // @ts-ignore
-          return getDistributionQuestions(sub.exam.distribution);
-        default:
-          // @ts-ignore
-          return sub.exam._count.questions;
-      }
-    };
-
-    const totalQuestions = calculateTotalQuestions(submission);
-
-    const calculateTimeTaken = (start: Date | null, end: Date | null) => {
-      if (!start || !end) return 'N/A';
-      const diffMs = end.getTime() - start.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      const hours = Math.floor(diffMins / 60);
-      const minutes = diffMins % 60;
-      return hours > 0 ? `${hours} giờ ${minutes} phút` : `${minutes} phút`;
-    };
-
-    const timeTaken = calculateTimeTaken(
-      submission.start_time,
-      submission.end_time,
+    const extraHosts = new Set<string>();
+    const view = await this.buildSubmissionView(
+      submission,
+      options,
+      extraHosts,
     );
-    const score =
-      submission.total_score !== null
-        ? Number(submission.total_score).toFixed(2)
-        : '0.00';
-    const rating = submission.rating || 'N/A';
+    const html = renderSubmissionPdfHtml(view);
+    const footerLabel = `${view.examTitle} — ${view.student.fullName}`;
 
-    const getRatingColor = (r: string | null) => {
-      switch (r) {
-        case 'EXCELLENT':
-          return '#22c55e';
-        case 'GOOD':
-          return '#3b82f6';
-        case 'AVERAGE':
-          return '#eab308';
-        case 'POOR':
-          return '#ef4444';
-        default:
-          return '#6b7280';
-      }
+    return submissionPdfSlots.run(() =>
+      this.renderPdf(html, footerLabel, [...extraHosts]),
+    );
+  }
+
+  private async buildSubmissionView(
+    submission: SubmissionForPdf,
+    { showQuestions, staffView }: SubmissionPdfOptions,
+    extraHosts: Set<string>,
+  ): Promise<SubmissionPdfView> {
+    const totalQuestions = countExamQuestions(submission.exam);
+    const scorePerQuestion =
+      totalQuestions <= 0 ? 0 : Number((10 / totalQuestions).toFixed(2));
+
+    const questions: SubmissionPdfQuestion[] = showQuestions
+      ? await Promise.all(
+          submission.questions.map(async (sq, index) => {
+            const correctOptions = parseOptions(sq.question.options);
+            const studentOptions = parseOptions(sq.options);
+            const options: SubmissionPdfOption[] = correctOptions.map(
+              (option) => ({
+                text: option.text,
+                isCorrect: option.isCorrect,
+                isStudentChoice: studentOptions.some(
+                  (chosen) => chosen.isCorrect && chosen.text === option.text,
+                ),
+              }),
+            );
+            const media = await Promise.all(
+              sq.question.files.map(({ file }) =>
+                this.toPdfMedia(file, extraHosts),
+              ),
+            );
+            return {
+              number: index + 1,
+              questionText: sq.question.question_text,
+              questionType: sq.question.question_type,
+              isCorrect: sq.is_correct,
+              score: (scorePerQuestion * Number(sq.score ?? 0)).toFixed(2),
+              options,
+              answer: sq.answer,
+              correctAnswer: sq.question.correct_answer,
+              media,
+            };
+          }),
+        )
+      : [];
+
+    return {
+      examTitle: submission.exam.title,
+      topicName: submission.exam.topic?.name ?? '',
+      isPractice: submission.exam.practice,
+      totalScore:
+        submission.total_score !== null
+          ? Number(submission.total_score).toFixed(2)
+          : '0.00',
+      timeTaken: formatDuration(submission.start_time, submission.end_time),
+      status: formatStatus(submission.status),
+      totalQuestions,
+      staffView,
+      showQuestions,
+      student: {
+        fullName: submission.student?.full_name ?? '',
+        email: submission.student?.email ?? '',
+      },
+      submissionId: submission.id,
+      submittedAt: submission.end_time
+        ? submission.end_time.toLocaleString('vi-VN', {
+            timeZone: 'Asia/Ho_Chi_Minh',
+            dateStyle: 'short',
+            timeStyle: 'short',
+          })
+        : 'N/A',
+      questions,
     };
+  }
 
-    const ratingColor = getRatingColor(submission.rating);
+  /**
+   * Images are inlined as data URLs so Chromium never needs network access to
+   * the bucket; audio/video cannot be printed and only render as a label.
+   */
+  private async toPdfMedia(
+    file: PdfFile,
+    extraHosts: Set<string>,
+  ): Promise<SubmissionPdfMedia> {
+    if (file.type !== FileType.IMAGE) {
+      return { name: file.name, kind: file.type, src: null };
+    }
+    try {
+      if (!file.s3_key && /^https:\/\//i.test(file.url)) {
+        extraHosts.add(new URL(file.url).hostname);
+        return { name: file.name, kind: file.type, src: file.url };
+      }
+      const key = file.s3_key ?? file.url;
+      const bytes = await this.s3.getBoundedObject(key, MAX_INLINE_IMAGE_BYTES);
+      const mime = imageMimeType(file.name || key);
+      return {
+        name: file.name,
+        kind: file.type,
+        src: `data:${mime};base64,${bytes.toString('base64')}`,
+      };
+    } catch (error) {
+      // A missing image must not block exporting the whole result.
+      this.logger.warn(
+        `Could not inline image file ${file.id} for submission PDF: ${String(error)}`,
+      );
+      return { name: file.name, kind: file.type, src: null };
+    }
+  }
 
-    const htmlContent = `
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kết quả bài thi - ${submission.student?.full_name}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: white; color: #111827; }
-        .math-content { display: inline-block; }
-        @page { size: A4; margin: 1cm; }
-        @media print {
-            .no-break { break-inside: avoid; }
-        }
-    </style>
-</head>
-<body class="p-4">
-    <div class="max-w-4xl mx-auto space-y-8">
-        <!-- Header -->
-        <div class="bg-[#0066cc] p-8 rounded-2xl text-white shadow-lg overflow-hidden relative">
-            <div class="relative z-10 flex justify-between items-center">
-                <div>
-                    <h1 class="text-3xl font-bold mb-2">${submission.student?.full_name}</h1>
-                    <p class="text-blue-100 flex items-center gap-2 mb-4">
-                       ${submission.student?.email}
-                    </p>
-                    <div class="flex flex-wrap gap-4">
-                        <div class="bg-white/10 px-3 py-1.5 rounded-lg border border-white/20 text-sm">
-                            Bài thi: <strong>${submission.exam.title}</strong>
-                        </div>
-                        <div class="bg-white/10 px-3 py-1.5 rounded-lg border border-white/20 text-sm">
-                            Xếp loại: <span style="background-color: ${ratingColor}" class="px-2 py-0.5 rounded text-xs font-bold">${rating}</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="text-center bg-white/10 p-6 rounded-2xl border border-white/20 min-w-[140px]">
-                    <div class="text-blue-100 text-xs font-bold uppercase tracking-wider mb-1">Tổng điểm</div>
-                    <div class="text-5xl font-black">${score}</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Stats Grid -->
-        <div class="grid grid-cols-3 gap-6">
-            <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                <div class="text-xs font-bold text-gray-500 uppercase mb-1">Thời gian làm bài</div>
-                <div class="font-bold text-gray-900">${timeTaken}</div>
-            </div>
-            <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                <div class="text-xs font-bold text-gray-500 uppercase mb-1">Trạng thái</div>
-                <div class="font-bold text-gray-900">${submission.status === 'COMPLETED' ? 'Hoàn thành' : submission.status}</div>
-            </div>
-            <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                <div class="text-xs font-bold text-gray-500 uppercase mb-1">Số câu hỏi</div>
-                <div class="font-bold text-gray-900">${totalQuestions}</div>
-            </div>
-        </div>
-
-        <!-- Questions -->
-        <div class="space-y-6">
-            <h2 class="text-2xl font-bold text-gray-900 border-b-2 border-blue-600 pb-2">Chi tiết câu trả lời</h2>
-            ${(
-              await Promise.all(
-                submission.questions.map(async (sq: any, index: number) => {
-                  const options = sq.question.options
-                    ? JSON.parse(sq.question.options)
-                    : [];
-                  const studentAnswers = sq.options
-                    ? JSON.parse(sq.options)
-                    : [];
-
-                  const qScore =
-                    sq.score !== null
-                      ? Number((sq.score * 10) / totalQuestions).toFixed(2)
-                      : '0.00';
-
-                  return `
-                <div class="no-break border-2 rounded-2xl p-6 shadow-sm ${sq.is_correct ? 'border-green-100 bg-green-50/20' : 'border-red-100 bg-red-50/20'}">
-                    <div class="flex justify-between items-center mb-4">
-                        <div class="flex items-center gap-3">
-                            <span class="text-lg font-bold">Câu ${index + 1}:</span>
-                            <span class="px-3 py-1 rounded-lg text-xs font-bold text-white ${sq.is_correct ? 'bg-green-500' : 'bg-red-500'}">
-                                ${sq.is_correct ? 'Đúng' : 'Sai'}
-                            </span>
-                        </div>
-                        <div class="bg-white px-4 py-1.5 rounded-full border border-gray-300 shadow-sm text-sm font-bold">
-                            ${qScore} điểm
-                        </div>
-                    </div>
-                    
-                    <div class="text-lg font-medium text-gray-800 mb-6">
-                        ${sq.question.question_text}
-                    </div>
-
-                    ${
-                      sq.question.question_type === 'ESSAY'
-                        ? `
-                        <div class="space-y-4">
-                            <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                                <p class="text-xs font-bold text-gray-400 uppercase mb-2">Câu trả lời của thí sinh:</p>
-                                <p class="text-gray-700 whitespace-pre-wrap">${sq.answer || 'Không có câu trả lời'}</p>
-                            </div>
-                            <div class="bg-green-50 p-4 rounded-xl border border-green-200">
-                                <p class="text-xs font-bold text-green-700 uppercase mb-2">Đáp án mẫu:</p>
-                                <div class="text-gray-800">${sq.question.correct_answer || ''}</div>
-                            </div>
-                        </div>
-                    `
-                        : `
-                        <div class="grid grid-cols-1 gap-3">
-                            ${options
-                              .map((opt: any) => {
-                                const isChoice = studentAnswers.some(
-                                  (so: any) =>
-                                    so.text === opt.text &&
-                                    so.isCorrect === true,
-                                );
-                                const isCorrect = opt.isCorrect === true;
-
-                                let classes = 'border-gray-100 bg-white';
-                                if (isCorrect)
-                                  classes =
-                                    'border-green-400 bg-green-50 text-green-900';
-
-                                return `
-                                <div class="flex items-center justify-between p-4 rounded-xl border-2 shadow-sm ${classes}">
-                                    <div class="flex items-center gap-3">
-                                        ${isCorrect ? `<svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>` : ''}
-                                        <div class="font-medium">${opt.text}</div>
-                                    </div>
-                                    ${
-                                      isChoice
-                                        ? `
-                                        <span class="px-3 py-1.5 bg-white border border-gray-300 rounded-full text-[10px] font-bold uppercase tracking-tight text-gray-900 shadow-sm">
-                                            Thí sinh chọn
-                                        </span>
-                                    `
-                                        : ''
-                                    }
-                                </div>
-                              `;
-                              })
-                              .join('')}
-                        </div>
-                    `
-                    }
-                </div>
-              `;
-                }),
-              )
-            ).join('')}
-        </div>
-    </div>
-
-    <script>
-        window.addEventListener('load', () => {
-            renderMathInElement(document.body, {
-                delimiters: [
-                    {left: '$$', right: '$$', display: true},
-                    {left: '$', right: '$', display: false},
-                    {left: '\\\\(', right: '\\\\)', display: false},
-                    {left: '\\\\[', right: '\\\\]', display: true}
-                ],
-                throwOnError : false
-            });
-        });
-    </script>
-</body>
-</html>
-    `;
-
+  private async renderPdf(
+    html: string,
+    footerLabel: string,
+    extraHosts: string[],
+  ): Promise<Buffer> {
     const browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
-    const page = await browser.newPage();
+    try {
+      const page = await browser.newPage();
+      try {
+        // Armed before loading the HTML so no subresource can slip through.
+        const allowedHosts = [this.s3.getStorageHost(), ...extraHosts];
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          const action = isAllowedPrintRequest(request.url(), allowedHosts)
+            ? request.continue()
+            : request.abort('blockedbyclient');
+          action.catch(() => undefined);
+        });
+        await page.emulateMediaType('print');
+        await page.setContent(html, {
+          waitUntil: 'networkidle0',
+          timeout: PAGE_LOAD_TIMEOUT_MS,
+        });
+        await page
+          .waitForFunction(`window.${PRINT_READY_FLAG} === true`, {
+            timeout: MATH_READY_TIMEOUT_MS,
+          })
+          .catch(() =>
+            this.logger.warn(
+              'Math rendering timed out while generating a submission PDF',
+            ),
+          );
+        await page.evaluate('document.fonts.ready');
 
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' },
-    });
-
-    await browser.close();
-
-    return Buffer.from(pdfBuffer);
+        const pdf = await page.pdf({
+          format: 'A4',
+          printBackground: true,
+          displayHeaderFooter: true,
+          headerTemplate: '<div></div>',
+          footerTemplate: `
+            <div style="width:100%;font-size:9px;font-family:sans-serif;color:#6b7280;padding:0 15mm;display:flex;justify-content:space-between;gap:12px;">
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(footerLabel)}</span>
+              <span style="white-space:nowrap;">Trang <span class="pageNumber"></span>/<span class="totalPages"></span></span>
+            </div>`,
+          margin: { top: '15mm', right: '15mm', bottom: '18mm', left: '15mm' },
+        });
+        return Buffer.from(pdf);
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await browser.close();
+    }
   }
 
   async generateBlankExamPdf(examId: string): Promise<Buffer> {
@@ -517,4 +564,82 @@ export class PdfService {
 
     return Buffer.from(pdfBuffer);
   }
+}
+
+function countExamQuestions(exam: SubmissionForPdf['exam']): number {
+  if (exam.mode === 'RANDOM_N') {
+    return exam.sample_size ?? 0;
+  }
+  if (
+    (exam.mode === 'BY_TYPE' || exam.mode === 'BY_CHAPTER') &&
+    exam.distribution
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(exam.distribution);
+      if (Array.isArray(parsed)) {
+        return parsed.reduce<number>((sum, item: unknown) => {
+          const quantity = Number(
+            (item as { quantity?: unknown } | null)?.quantity,
+          );
+          return Number.isFinite(quantity) ? sum + quantity : sum;
+        }, 0);
+      }
+    } catch {
+      // Malformed distribution: fall back to the linked question count.
+    }
+  }
+  return exam._count.questions;
+}
+
+function parseOptions(raw: unknown): ParsedOption[] {
+  let value: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (item): item is { text: unknown; isCorrect?: unknown } =>
+        typeof item === 'object' && item !== null && 'text' in item,
+    )
+    .map((item) => ({
+      text:
+        typeof item.text === 'string' || typeof item.text === 'number'
+          ? String(item.text)
+          : '',
+      isCorrect: item.isCorrect === true,
+    }));
+}
+
+function formatDuration(start: Date | null, end: Date | null): string {
+  if (!start || !end) return 'N/A';
+  const minutes = Math.max(
+    0,
+    Math.floor((end.getTime() - start.getTime()) / 60_000),
+  );
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours > 0 ? `${hours} giờ ${rest} phút` : `${rest} phút`;
+}
+
+function formatStatus(status: string): string {
+  switch (status) {
+    case 'COMPLETED':
+      return 'Hoàn thành';
+    case 'IN_PROGRESS':
+      return 'Đang làm bài';
+    case 'CANCELLED':
+      return 'Đã hủy';
+    default:
+      return status;
+  }
+}
+
+function imageMimeType(name: string): string {
+  const extension = name.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_MIME_BY_EXTENSION[extension] ?? 'image/png';
 }

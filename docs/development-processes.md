@@ -1,5 +1,11 @@
 # Background development processes
 
+For a built container stack instead of PM2/watch, use
+`docker compose --profile generation up -d --build`; see
+[local Docker generation setup](docker-generation.md). This starts the API and
+both workers with PostgreSQL/Redis; Python remains on the host. Do not run it
+alongside the host dev group on the same port/queues. Choose one mode.
+
 Run these commands from the backend repository after `npm install`:
 
 ```powershell

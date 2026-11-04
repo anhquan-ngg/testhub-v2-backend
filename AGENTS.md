@@ -13,6 +13,14 @@
 - Keep this at the driver adapter boundary: sequential application awaits cannot prevent Prisma's internal relation-query fan-out. Do not edit node_modules or suppress the pg deprecation warning.
 - See docs/prisma-pg-serialization.md for offline regressions and removal once a verified upstream stable fix ships. No migration or dependency upgrade is required.
 
+## Local Compose generation profile (2026-11-02)
+
+- `docker compose --profile generation up -d --build` starts API + AI worker + document/indexing worker with existing PostgreSQL/Redis. Host Python and frontend stay separate; do not run competing PM2/manual backend processes.
+- Default Compose remains infrastructure-only. Preserve the Postgres image, container names and volumes; pgvector/RAG setup and migrations remain explicit operator prerequisites, never automatic at build/startup.
+- Shared Dockerfile builds Linux Prisma Client and Nest output without host dependencies or secrets. Keep `.dockerignore` allowlisted; never COPY `.env`, keys, local data or continuity into an image.
+- Container DB/Redis hosts are `postgres`/`redis`; Python defaults to `host.docker.internal:8000`. Optional `DOCKER_DATABASE_URL` and `DOCKER_AI_SERVICE_BASE_URL` override container settings only. The opt-in local profile enables AI/RAG and uses development cookies.
+- See docs/docker-generation.md for setup and shutdown. `node --test scripts/compose.test.cjs` resolves synthetic configuration without reading real secrets or starting queues.
+
 ## Background dev processes (2026-10-25)
 
 - npm run dev:up/status/logs/down manage a private local PM2 daemon and one Nest watch compiler plus API/AI/document processes. See docs/development-processes.md.
@@ -242,9 +250,9 @@ Không có `.env.example` (README nhắc tới nhưng file không tồn tại). 
 
 Luồng thử nghiệm Gemini trực tiếp đã gỡ; Gemini thuộc `../testhub-ai-service`. Module generation có batch/staging, worker FastAPI, review/revision và commit đã duyệt. Xem `docs/ai-question-generation.md` và `.env.ai.example`.
 
-Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
+Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_RAG_ENABLED`, `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
 
-`docker-compose.yaml` còn dùng `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`. Khi thêm biến mới, ghi tên biến vào mục này (không ghi giá trị).
+`docker-compose.yaml` còn dùng `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`, `DOCKER_DATABASE_URL`, `DOCKER_AI_SERVICE_BASE_URL`. Khi thêm biến mới, ghi tên biến vào mục này (không ghi giá trị).
 
 ## 7. Kiểm tra cần chạy theo phạm vi thay đổi
 

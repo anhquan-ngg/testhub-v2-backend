@@ -1,0 +1,16 @@
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!nest-cli.json
+!prisma.config.ts
+!prisma/
+!prisma/schema.prisma
+!src/
+!src/**
+src/**/*.spec.ts
+src/**/fixtures/
+src/generated/

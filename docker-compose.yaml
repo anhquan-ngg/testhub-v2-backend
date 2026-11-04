@@ -1,4 +1,60 @@
+x-backend: &backend
+  image: testhub-backend:local
+  build:
+    context: .
+    dockerfile: Dockerfile
+  profiles: ['generation']
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 4m
+  env_file:
+    - .env
+  environment:
+    NODE_ENV: development
+    PORT: '3001'
+    DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-testhub}}
+    REDIS_URL: redis://redis:6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_password}
+    AI_QUESTION_GENERATION_ENABLED: 'true'
+    AI_RAG_ENABLED: 'true'
+    AI_SERVICE_BASE_URL: ${DOCKER_AI_SERVICE_BASE_URL:-http://host.docker.internal:8000}
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - testhub_network
+
 services:
+  api:
+    <<: *backend
+    command: ['node', 'dist/main.js']
+    ports:
+      - '127.0.0.1:${PORT:-3001}:3001'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  ai-worker:
+    <<: *backend
+    command: ['node', 'dist/question-generation.worker.js']
+
+  document-worker:
+    <<: *backend
+    command: ['node', 'dist/document.worker.js']
+
   postgres:
     image: postgres:17-alpine
     container_name: testhub_db
@@ -29,7 +85,8 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redis_password}', 'ping']
+      test:
+        ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redis_password}', 'ping']
       interval: 10s
       timeout: 5s
       retries: 5
