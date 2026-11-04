@@ -8,6 +8,7 @@ COPY prisma.config.ts ./
 RUN DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build npx prisma generate
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src ./src
+# build rewrites @/ imports while the dev-only tsc-alias tool is still installed.
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 FROM node:22-bookworm-slim AS runtime

@@ -175,18 +175,18 @@ export class PdfService {
       throw new NotFoundException('Submission not found');
     }
 
-    const extraHosts = new Set<string>();
-    const view = await this.buildSubmissionView(
-      submission,
-      options,
-      extraHosts,
-    );
-    const html = renderSubmissionPdfHtml(view);
-    const footerLabel = `${view.examTitle} — ${view.student.fullName}`;
+    return submissionPdfSlots.run(async () => {
+      const extraHosts = new Set<string>();
+      const view = await this.buildSubmissionView(
+        submission,
+        options,
+        extraHosts,
+      );
+      const html = renderSubmissionPdfHtml(view);
+      const footerLabel = `${view.examTitle} — ${view.student.fullName}`;
 
-    return submissionPdfSlots.run(() =>
-      this.renderPdf(html, footerLabel, [...extraHosts]),
-    );
+      return this.renderPdf(html, footerLabel, [...extraHosts]);
+    });
   }
 
   private async buildSubmissionView(
