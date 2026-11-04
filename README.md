@@ -95,6 +95,23 @@ existing tokens require login again. See [auth session setup and contract](docs/
 - Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
   limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
 
+## Exam report PDF presentation
+
+`ExamReportService` mirrors the results page: a compact report heading, a white
+rounded results card, pale table headings, blue scores and semantic result badges.
+Name and email share one student cell; ratings and durations use Vietnamese labels.
+The A4 landscape table repeats its header on subsequent pages and avoids splitting
+rows; long names/emails wrap within their cell. CSS and SVG icons are self-contained;
+no Tailwind or font CDN is required.
+
+The local Docker API runs compiled code, without a source bind mount. After changing
+this template, apply it with `docker compose --profile generation build api` followed
+by `docker compose --profile generation up -d --no-deps api`. This refreshes only the
+API container, leaving running workers, PostgreSQL and Redis untouched.
+
+The existing report endpoint, download headers, calculations and Puppeteer PDF
+options are unchanged. Offline regressions: `npx jest --runInBand exam-report.service.spec`.
+
 ## Submission result PDF concurrency
 
 `PdfService.generateSubmissionPdf` uses two independent, process-wide FIFO limits:
