@@ -6,6 +6,9 @@
     "deleteOutDir": true,
     "assets": [
       {
+        "include": "submission/fonts/*.woff2"
+      },
+      {
         "include": "../generated/**/*",
         "outDir": "./generated",
         "watchAssets": true
@@ -13,3 +16,4 @@
     ]
   }
 }
+
