@@ -95,6 +95,33 @@ existing tokens require login again. See [auth session setup and contract](docs/
 - Follow docs/rag-indexing.md for operator-run local schema/account setup, contracts,
   limits, demo and isolated tests. Earlier extraction-only snapshots are historical.
 
+## Exam report PDF presentation
+
+`ExamReportService` mirrors the results page: a compact report heading, a white
+rounded results card, pale table headings, blue scores and semantic result badges.
+Name and email share one student cell; ratings and durations use Vietnamese labels.
+The A4 landscape table repeats its header on subsequent pages and avoids splitting
+rows; long names/emails wrap within their cell. CSS and SVG icons are self-contained;
+no Tailwind or font CDN is required.
+
+The local Docker API runs compiled code, without a source bind mount. After changing
+this template, apply it with `docker compose --profile generation build api` followed
+by `docker compose --profile generation up -d --no-deps api`. This refreshes only the
+API container, leaving running workers, PostgreSQL and Redis untouched.
+
+The existing report endpoint, download headers, calculations and Puppeteer PDF
+options are unchanged. Offline regressions: `npx jest --runInBand exam-report.service.spec`.
+
+## Submission result PDF concurrency
+
+`PdfService.generateSubmissionPdf` uses two independent, process-wide FIFO limits:
+media/view/HTML preparation allows 2 active requests and 4 waiters, while Chromium
+rendering retains its existing 2 active requests and 4 waiters. Preparation releases
+its permit before entering the render queue; S3 downloads never hold render permits.
+A full queue in either stage returns HTTP 503. Limits apply per process, not across
+replicas. Per-submission media fan-out, the 5 MiB image limit and missing-image
+fallback remain unchanged. Offline regressions: `npx jest --runInBand pdf.service.spec`.
+
 ## Tài liệu học tập — PDF/PPTX và trích xuất nền
 
 Module `src/learning-documents/` có metadata/phiên bản riêng, presigned upload,

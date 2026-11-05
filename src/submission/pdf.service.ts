@@ -50,7 +50,7 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   bmp: 'image/bmp',
 };
 
-/** Minimal FIFO counting semaphore bounding concurrent Chromium instances. */
+/** Minimal FIFO counting semaphore bounding active tasks and queued requests. */
 class Semaphore {
   private readonly waiters: Array<() => void> = [];
 
@@ -80,6 +80,7 @@ class Semaphore {
   }
 }
 
+const submissionPdfPreparationSlots = new Semaphore(2, 4);
 const submissionPdfSlots = new Semaphore(2, 4);
 
 const submissionPdfInclude = {
@@ -175,18 +176,23 @@ export class PdfService {
       throw new NotFoundException('Submission not found');
     }
 
-    return submissionPdfSlots.run(async () => {
+    const prepared = await submissionPdfPreparationSlots.run(async () => {
       const extraHosts = new Set<string>();
       const view = await this.buildSubmissionView(
         submission,
         options,
         extraHosts,
       );
-      const html = renderSubmissionPdfHtml(view);
-      const footerLabel = `${view.examTitle} — ${view.student.fullName}`;
-
-      return this.renderPdf(html, footerLabel, [...extraHosts]);
+      return {
+        html: renderSubmissionPdfHtml(view),
+        footerLabel: `${view.examTitle} — ${view.student.fullName}`,
+        extraHosts: [...extraHosts],
+      };
     });
+
+    return submissionPdfSlots.run(() =>
+      this.renderPdf(prepared.html, prepared.footerLabel, prepared.extraHosts),
+    );
   }
 
   private async buildSubmissionView(
