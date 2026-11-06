@@ -1,4 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as puppeteer from 'puppeteer';
 import type { PrismaService } from '@/prisma/prisma.service';
 import { ExamReportService } from './exam-report.service';
@@ -107,6 +109,26 @@ describe('ExamReportService PDF presentation', () => {
     expect(html).toContain('print-color-adjust: exact');
     expect(html).not.toMatch(/<script|<link|https?:\/\//);
     expect(html.match(/<th scope="col"/g)).toHaveLength(7);
+  });
+
+  it('preserves bundled Vietnamese fonts and the refined neutral table palette', async () => {
+    const html = await generate();
+    expect(html.match(/@font-face/g)).toHaveLength(3);
+    for (const subset of ['vietnamese', 'latin-ext', 'latin']) {
+      const bytes = readFileSync(
+        join(__dirname, 'fonts', `inter-${subset}.woff2`),
+      );
+      expect(bytes.subarray(0, 4).toString('ascii')).toBe('wOF2');
+      expect(html).toContain(
+        `data:font/woff2;base64,${bytes.toString('base64')}`,
+      );
+    }
+    expect(html).toContain('font-weight: 100 900');
+    expect(html).toContain('U+1EA0-1EF9');
+    expect(html).toContain("font-family: 'Inter', 'Segoe UI', Roboto, Arial");
+    expect(html).toContain('border: 1px solid #d1d5db');
+    expect(html).toContain('th { background: #f9fafb');
+    expect(html).toContain('td { border-bottom: 1px solid #e5e7eb');
   });
 
   it('renders all rating palettes, fallback values and an empty report', async () => {

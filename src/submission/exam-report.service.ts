@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
+﻿import { Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import * as puppeteer from 'puppeteer';
 import { escapeHtml } from '@/exam-print/exam-print.templates';
+import { getInterFontFaceCss } from './report-fonts';
 
 @Injectable()
 export class ExamReportService implements OnModuleDestroy {
@@ -139,6 +140,7 @@ export class ExamReportService implements OnModuleDestroy {
     <title>Báo cáo bài thi - ${escapeHtml(exam.title)}</title>
     <style>
         /* Mirrors the web design tokens without a runtime CSS/font CDN. */
+        ${getInterFontFaceCss()}
         :root {
             --accent-100: #eef6ff;
             --accent-200: #d6ebff;
@@ -155,7 +157,7 @@ export class ExamReportService implements OnModuleDestroy {
         @page { size: A4 landscape; }
         html, body { margin: 0; padding: 0; }
         body {
-            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            font-family: 'Inter', 'Segoe UI', Roboto, Arial, sans-serif;
             font-size: 10pt;
             line-height: 1.5;
             color: var(--neutral-900);
@@ -168,7 +170,7 @@ export class ExamReportService implements OnModuleDestroy {
         h1 { margin: 0 0 4px; font-size: 17pt; line-height: 1.3; font-weight: 700; }
         .exam-title { margin: 0; color: #98989b; font-size: 9pt; overflow-wrap: anywhere; }
         .results-card {
-            padding: 20px; border: 1px solid #d4d4d7; border-radius: 12px;
+            padding: 20px; border: 1px solid #d1d5db; border-radius: 12px;
             background: #fff; box-shadow: 0 1px 2px #0000000d;
         }
         .results-heading {
@@ -186,8 +188,8 @@ export class ExamReportService implements OnModuleDestroy {
         thead { display: table-header-group; }
         tr { break-inside: avoid; page-break-inside: avoid; page-break-after: auto; }
         th, td { padding: 10px 8px; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
-        th { background: #f8f9fb; font-weight: 500; font-size: 8.5pt; border-bottom: 1px solid var(--neutral-200); }
-        td { border-bottom: 1px solid #f0f0f3; font-size: 9pt; background: #fcfcfe; }
+        th { background: #f9fafb; color: var(--neutral-900); font-weight: 500; font-size: 8.5pt; border-bottom: 1px solid #d1d5db; }
+        td { border-bottom: 1px solid #e5e7eb; font-size: 9pt; background: #fff; }
         tbody tr:last-child td { border-bottom: 0; }
         .text-left { text-align: left; }
         .student { display: flex; align-items: center; gap: 8px; }

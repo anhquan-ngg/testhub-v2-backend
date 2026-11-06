@@ -102,7 +102,10 @@ rounded results card, pale table headings, blue scores and semantic result badge
 Name and email share one student cell; ratings and durations use Vietnamese labels.
 The A4 landscape table repeats its header on subsequent pages and avoids splitting
 rows; long names/emails wrap within their cell. CSS and SVG icons are self-contained;
-no Tailwind or font CDN is required.
+no Tailwind or font CDN is required. Bundled Inter WOFF2 subsets (Vietnamese,
+Latin Extended and Latin) are embedded as data URIs; Nest copies them from
+`src/submission/fonts` to `dist/submission/fonts` during builds. If assets are
+unavailable, the report retains its system-font fallback stack.
 
 The local Docker API runs compiled code, without a source bind mount. After changing
 this template, apply it with `docker compose --profile generation build api` followed
