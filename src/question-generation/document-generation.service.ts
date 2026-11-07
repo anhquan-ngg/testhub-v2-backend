@@ -51,7 +51,7 @@ export class DocumentGenerationService {
     this.enabled();
     if (command.source.mode !== 'document')
       this.fail('AI_DOCUMENT_SOURCE_INVALID');
-    return this.source({
+    const source = await this.source({
       created_by: owner,
       topic_id: command.topic_id,
       chapter_id: command.chapter_id,
@@ -61,6 +61,8 @@ export class DocumentGenerationService {
       source_profile_id: null,
       source_query: command.source.query,
     });
+    if (source.document.archived_at) this.fail('AI_DOCUMENT_SOURCE_INVALID');
+    return source;
   }
   private async source(input: SourceInput) {
     if (!input.source_version_id) this.fail('AI_DOCUMENT_SOURCE_INVALID');

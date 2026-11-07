@@ -160,6 +160,7 @@ export class GenerationBatchRepository {
               document: {
                 created_by: ownerId,
                 is_deleted: false,
+                archived_at: null,
                 topic_id: command.topic_id,
                 ...(!plan ? { chapter_id: command.chapter_id } : {}),
               },
@@ -169,6 +170,10 @@ export class GenerationBatchRepository {
             throw new ConflictException(
               'Document source is no longer available',
             );
+          await tx.learningDocument.update({
+            where: { id: version.document_id },
+            data: { last_used_at: new Date() },
+          });
         }
         return tx.questionGenerationBatch.create({
           data: {

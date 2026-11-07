@@ -17,6 +17,7 @@ import { getRedisConnection } from '../common/redis-connection';
 import { DocumentModule } from './document.module';
 import { DocumentRepository } from './document.repository';
 import { DocumentClient } from './document-client.service';
+import { DocumentCleanup } from './document-cleanup.service';
 import { DocumentExecution } from './document-execution.service';
 import { DOCUMENT_JOB, DOCUMENT_QUEUE } from './document.contract';
 
@@ -146,6 +147,7 @@ export class DocumentDispatcher implements OnModuleInit, OnModuleDestroy {
     BullModule.registerQueue({ name: DOCUMENT_QUEUE }, { name: RAG_QUEUE }),
   ],
   providers: [
+    DocumentCleanup,
     DocumentExecution,
     DocumentDispatcher,
     DocumentProcessor,

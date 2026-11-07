@@ -82,13 +82,18 @@ export class KnowledgePlanRepository {
             document: {
               ...this.documents.scope(owner),
               topic_id: input.topic_id,
+              archived_at: null,
             },
             status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] },
           },
-          select: { id: true },
+          select: { id: true, document_id: true },
         });
         if (!version)
           throw new NotFoundException('Document source unavailable');
+        await tx.learningDocument.update({
+          where: { id: version.document_id },
+          data: { last_used_at: new Date() },
+        });
         return tx.knowledgePlan.create({
           data: {
             created_by: owner,
