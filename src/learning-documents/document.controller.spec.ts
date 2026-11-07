@@ -19,7 +19,15 @@ import { DocumentClient } from './document-client.service';
 
 describe('Learning document HTTP validation, role and safe failures', () => {
   let app: INestApplication;
-  const repository = { target: jest.fn(), create: jest.fn() };
+  const repository = {
+    target: jest.fn(),
+    create: jest.fn(),
+    quota: jest.fn(),
+    list: jest.fn(),
+    purgeTarget: jest.fn(),
+    activeWork: jest.fn(),
+    purge: jest.fn(),
+  };
   const storage = {
     createUploadUrl: jest
       .fn()
@@ -79,6 +87,63 @@ describe('Learning document HTTP validation, role and safe failures', () => {
     jest.clearAllMocks();
     repository.target.mockResolvedValue({ id: command.chapter_id });
     repository.create.mockResolvedValue({ id: 'document' });
+    repository.quota.mockResolvedValue({ documents: 0, bytes: 0 });
+    repository.list.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+  });
+  it('rejects documents over the owner quota with 409', async () => {
+    repository.quota.mockResolvedValueOnce({ documents: 100, bytes: 0 });
+    await request(app.getHttpServer() as Server)
+      .post('/learning-documents')
+      .send(command)
+      .expect(409);
+    expect(repository.create).not.toHaveBeenCalled();
+  });
+  it('serves quota before the :id route and validates list filters', async () => {
+    const quota = await request(app.getHttpServer() as Server)
+      .get('/learning-documents/quota')
+      .expect(200);
+    expect(quota.body).toMatchObject({
+      documents: { used: 0 },
+      bytes: { used: 0 },
+    });
+    await request(app.getHttpServer() as Server)
+      .get('/learning-documents?archived=maybe')
+      .expect(400);
+    await request(app.getHttpServer() as Server)
+      .get('/learning-documents?q=week&archived=all')
+      .expect(200);
+    expect(repository.list).toHaveBeenCalledWith(
+      'owner',
+      1,
+      20,
+      undefined,
+      { q: 'week', archived: 'all' },
+    );
+  });
+  it('refuses to purge documents that are still active or in use', async () => {
+    const id = '33333333-3333-4333-8333-333333333333';
+    repository.purgeTarget.mockResolvedValueOnce({
+      id,
+      is_deleted: false,
+      archived_at: null,
+      purged_at: null,
+      versions: [],
+    });
+    await request(app.getHttpServer() as Server)
+      .post(`/learning-documents/${id}/purge`)
+      .expect(409);
+    repository.purgeTarget.mockResolvedValueOnce({
+      id,
+      is_deleted: false,
+      archived_at: new Date(),
+      purged_at: null,
+      versions: [],
+    });
+    repository.activeWork.mockResolvedValueOnce(1);
+    await request(app.getHttpServer() as Server)
+      .post(`/learning-documents/${id}/purge`)
+      .expect(409);
+    expect(repository.purge).not.toHaveBeenCalled();
   });
   afterAll(async () => {
     await app?.close();

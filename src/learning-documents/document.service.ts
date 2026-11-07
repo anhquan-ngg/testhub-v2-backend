@@ -5,15 +5,20 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { S3Service } from '../s3/s3.service';
 import { DocumentRepository } from './document.repository';
 import { DocumentClient } from './document-client.service';
 import {
+  checkDuplicateSchema,
   createDocumentSchema,
   DOCUMENT_MAX_BYTES,
   DOCUMENT_RESULT_MAX_BYTES,
+  documentQuota,
   extractionSchema,
+  ListDocumentsQuery,
+  renameDocumentSchema,
   UploadDocument,
   uploadDocumentSchema,
 } from './document.contract';
@@ -38,6 +43,7 @@ export class DocumentService {
       !(await this.repository.target(ownerId, value.topic_id, value.chapter_id))
     )
       throw new NotFoundException('Target unavailable');
+    await this.requireQuota(ownerId, value.upload.size, true);
     const id = randomUUID();
     const version = this.newVersion(id, value.upload);
     const signed = await this.storage.createUploadUrl(
@@ -68,6 +74,7 @@ export class DocumentService {
     if (!parsed.success)
       throw new BadRequestException('Invalid document upload or consent');
     await this.detail(ownerId, id);
+    await this.requireQuota(ownerId, parsed.data.size, false);
     const version = this.newVersion(id, parsed.data);
     const signed = await this.storage.createUploadUrl(
       version.upload_key,
@@ -136,6 +143,14 @@ export class DocumentService {
     const hash = createHash('sha256').update(bytes).digest('hex');
     const key = `learning-documents/${documentId}/${versionId}/source/${hash}`;
     await this.storage.putBoundedObject(key, bytes, version.mime_type);
+    const reused = await this.reuseExtraction(
+      ownerId,
+      documentId,
+      version,
+      key,
+      hash,
+    );
+    if (reused) return reused;
     const changed = await this.repository.complete(
       ownerId,
       versionId,
@@ -159,10 +174,128 @@ export class DocumentService {
     };
   }
 
+  /**
+   * Skip parsing/OCR when the same owner already extracted identical bytes with
+   * the same options. The artifact is re-verified and copied to this version's own
+   * key, so unique keys and per-version purge stay safe. Any problem returns null
+   * and the normal queue path runs.
+   */
+  private async reuseExtraction(
+    ownerId: string,
+    documentId: string,
+    version: {
+      id: string;
+      source_type: 'PDF' | 'PPTX';
+      include_notes: boolean;
+    },
+    sourceKey: string,
+    hash: string,
+  ) {
+    let artifactKey: string | null = null;
+    try {
+      const donor = await this.repository.reusable(
+        ownerId,
+        hash,
+        version.source_type,
+        version.include_notes,
+        version.id,
+      );
+      if (
+        !donor?.artifact_key ||
+        !donor.artifact_sha256 ||
+        !donor.parser_version
+      )
+        return null;
+      const bytes = await this.storage.getBoundedObject(
+        donor.artifact_key,
+        DOCUMENT_RESULT_MAX_BYTES,
+      );
+      if (
+        createHash('sha256').update(bytes).digest('hex') !==
+        donor.artifact_sha256
+      )
+        return null;
+      const parsed = extractionSchema.safeParse(
+        JSON.parse(bytes.toString('utf8')),
+      );
+      if (
+        !parsed.success ||
+        parsed.data.source_sha256 !== hash ||
+        parsed.data.parser_version !== donor.parser_version
+      )
+        return null;
+      artifactKey = `learning-documents/${documentId}/${version.id}/extraction/reused-${randomUUID()}.json`;
+      await this.storage.putBoundedObject(
+        artifactKey,
+        bytes,
+        'application/json',
+      );
+      const changed = await this.repository.completeReused(
+        ownerId,
+        version.id,
+        {
+          source_key: sourceKey,
+          source_sha256: hash,
+          artifact_key: artifactKey,
+          artifact_sha256: donor.artifact_sha256,
+          parser_version: donor.parser_version,
+          unit_count: donor.unit_count,
+          warnings: donor.warnings as Prisma.InputJsonValue | null,
+          status: donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
+        },
+      );
+      if (!changed.count) {
+        await this.storage.remove(artifactKey);
+        return null;
+      }
+      return {
+        document_id: documentId,
+        version_id: version.id,
+        status: donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
+        reused_extraction: true,
+      };
+    } catch {
+      if (artifactKey) await this.storage.remove(artifactKey);
+      return null;
+    }
+  }
+
+  /** Owner-scoped exact-bytes lookup so the UI can offer reuse before uploading. */
+  async checkDuplicate(ownerId: string, input: unknown) {
+    const parsed = checkDuplicateSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('Invalid file hash');
+    const rows = await this.repository.duplicates(
+      ownerId,
+      parsed.data.sha256,
+      parsed.data.source_type,
+    );
+    return {
+      data: rows.map((row) => ({
+        document_id: row.document.id,
+        title: row.document.title,
+        topic_id: row.document.topic_id,
+        chapter_id: row.document.chapter_id,
+        archived_at: row.document.archived_at,
+        version_id: row.id,
+        version: row.version,
+        file_name: row.file_name,
+        status: row.status,
+        include_notes: row.include_notes,
+        created_at: row.created_at,
+      })),
+    };
+  }
+
   /** List metadata without disclosing storage keys or extraction bodies. */
-  list(ownerId: string, page: number, limit: number, topicId?: string) {
+  list(
+    ownerId: string,
+    page: number,
+    limit: number,
+    topicId?: string,
+    filter: ListDocumentsQuery = { archived: 'false' },
+  ) {
     this.pagination(page, limit);
-    return this.repository.list(ownerId, page, limit, topicId);
+    return this.repository.list(ownerId, page, limit, topicId, filter);
   }
 
   /** Return accessible metadata and version history. */
@@ -217,10 +350,87 @@ export class DocumentService {
     };
   }
 
-  /** Revoke future access/processing; retain artifacts until a retention policy is configured. */
+  /** Revoke future access/processing; stored bytes stay until the document is purged. */
   async revoke(ownerId: string, id: string): Promise<void> {
     if (!(await this.repository.revoke(ownerId, id)).count)
       throw new NotFoundException('Document unavailable');
+  }
+
+  /** Change the display title only; immutable versions are untouched. */
+  async rename(ownerId: string, id: string, input: unknown) {
+    const parsed = renameDocumentSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('Invalid title');
+    if (!(await this.repository.rename(ownerId, id, parsed.data.title)).count)
+      throw new NotFoundException('Document unavailable');
+    return this.detail(ownerId, id);
+  }
+
+  /** Reversible hide that blocks new generation without touching indexes. */
+  async archive(ownerId: string, id: string) {
+    const current = await this.detail(ownerId, id);
+    if (!current.archived_at) await this.repository.archive(ownerId, id);
+    return this.detail(ownerId, id);
+  }
+
+  /** Restore an archived document; a no-op when it is already active. */
+  async unarchive(ownerId: string, id: string) {
+    const current = await this.detail(ownerId, id);
+    if (current.archived_at) await this.repository.unarchive(ownerId, id);
+    return this.detail(ownerId, id);
+  }
+
+  /**
+   * Irreversibly delete stored bytes. Requires the document to be archived or
+   * revoked and free of active plans/batches. Idempotent once purged.
+   */
+  async purge(ownerId: string, id: string): Promise<void> {
+    const target = await this.repository.purgeTarget(ownerId, id);
+    if (!target) throw new NotFoundException('Document unavailable');
+    if (target.purged_at) return;
+    if (!target.is_deleted && !target.archived_at)
+      throw new ConflictException('Archive or revoke the document before purge');
+    if (await this.repository.activeWork(id))
+      throw new ConflictException('Document has active generation work');
+    const keys = target.versions.flatMap((version) =>
+      [version.upload_key, version.source_key, version.artifact_key].filter(
+        (key): key is string => !!key,
+      ),
+    );
+    for (const key of keys) await this.storage.remove(key);
+    await this.repository.purge(id);
+  }
+
+  /** Paginated version history beyond the bounded summary. */
+  async versions(ownerId: string, id: string, page: number, limit: number) {
+    this.pagination(page, limit);
+    await this.detail(ownerId, id);
+    return this.repository.versions(ownerId, id, page, limit);
+  }
+
+  /** Recent plans and batches that used this document. */
+  async history(ownerId: string, id: string, limit: number) {
+    this.pagination(1, limit);
+    await this.detail(ownerId, id);
+    return this.repository.history(ownerId, id, limit);
+  }
+
+  /** Current usage against the per-lecturer library limits. */
+  async quota(ownerId: string) {
+    const limits = documentQuota();
+    const used = await this.repository.quota(ownerId);
+    return {
+      documents: { used: used.documents, limit: limits.maxDocuments },
+      bytes: { used: used.bytes, limit: limits.maxBytes },
+    };
+  }
+
+  private async requireQuota(ownerId: string, size: number, newDocument: boolean) {
+    const limits = documentQuota();
+    const used = await this.repository.quota(ownerId);
+    if (newDocument && used.documents + 1 > limits.maxDocuments)
+      throw new ConflictException('Document library limit reached');
+    if (used.bytes + size > limits.maxBytes)
+      throw new ConflictException('Document storage quota exceeded');
   }
 
   private requireEnabled() {

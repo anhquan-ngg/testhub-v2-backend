@@ -47,7 +47,8 @@ export class NotificationGateway
       client.emit('notification:unread', unread);
     } catch (error) {
       void error;
-      client.emit('connect_error', {
+      // 'connect_error' is a reserved Socket.IO event name; emitting it throws and crashes the process.
+      client.emit('notification:error', {
         message: 'Internal server error during connection',
       });
       client.disconnect();

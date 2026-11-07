@@ -778,12 +778,17 @@ model LearningDocument {
   title        String   @db.VarChar(200)
   is_deleted   Boolean  @default(false)
   next_version Int      @default(2)
+  archived_at  DateTime?
+  last_used_at DateTime?
+  purged_at    DateTime?
   creator      User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
   topic        Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
   chapter      Chapter? @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
   versions     LearningDocumentVersion[]
 
   @@index([created_by, created_at(sort: Desc)])
+  @@index([created_by, archived_at])
+  @@index([created_by, title])
   @@index([topic_id, chapter_id])
   @@map("learning_documents")
 }
@@ -822,6 +827,7 @@ model LearningDocumentVersion {
   @@unique([document_id, version])
   @@index([status, next_dispatch_at])
   @@index([status, lease_expires_at])
+  @@index([source_sha256])
   @@map("learning_document_versions")
   generationBatches QuestionGenerationBatch[]
   knowledgePlans KnowledgePlan[]
