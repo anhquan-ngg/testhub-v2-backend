@@ -1,6 +1,7 @@
 import { RagController } from './rag.controller';
 import { RagService } from './rag.service';
 import {
+  ConflictException,
   ExecutionContext,
   INestApplication,
   ValidationPipe,
@@ -88,15 +89,23 @@ describe('Learning document HTTP validation, role and safe failures', () => {
     repository.target.mockResolvedValue({ id: command.chapter_id });
     repository.create.mockResolvedValue({ id: 'document' });
     repository.quota.mockResolvedValue({ documents: 0, bytes: 0 });
-    repository.list.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20 });
+    repository.list.mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 20,
+    });
   });
   it('rejects documents over the owner quota with 409', async () => {
-    repository.quota.mockResolvedValueOnce({ documents: 100, bytes: 0 });
+    repository.create.mockRejectedValueOnce(
+      new ConflictException('Document library limit reached'),
+    );
     await request(app.getHttpServer() as Server)
       .post('/learning-documents')
       .send(command)
       .expect(409);
-    expect(repository.create).not.toHaveBeenCalled();
+    expect(repository.create).toHaveBeenCalledTimes(1);
+    expect(repository.quota).not.toHaveBeenCalled();
   });
   it('serves quota before the :id route and validates list filters', async () => {
     const quota = await request(app.getHttpServer() as Server)
@@ -112,13 +121,10 @@ describe('Learning document HTTP validation, role and safe failures', () => {
     await request(app.getHttpServer() as Server)
       .get('/learning-documents?q=week&archived=all')
       .expect(200);
-    expect(repository.list).toHaveBeenCalledWith(
-      'owner',
-      1,
-      20,
-      undefined,
-      { q: 'week', archived: 'all' },
-    );
+    expect(repository.list).toHaveBeenCalledWith('owner', 1, 20, undefined, {
+      q: 'week',
+      archived: 'all',
+    });
   });
   it('refuses to purge documents that are still active or in use', async () => {
     const id = '33333333-3333-4333-8333-333333333333';

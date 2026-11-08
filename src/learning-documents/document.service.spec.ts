@@ -87,7 +87,7 @@ describe('Document upload and source boundaries', () => {
   });
   describe('library management', () => {
     let lib: Record<string, jest.Mock>;
-    let remove: jest.Mock;
+    let removeOrThrow: jest.Mock;
     let manager: DocumentService;
     beforeEach(() => {
       lib = {
@@ -98,10 +98,10 @@ describe('Document upload and source boundaries', () => {
         detail: jest.fn().mockResolvedValue({ id: 'doc' }),
         quota: jest.fn().mockResolvedValue({ documents: 1, bytes: 10 }),
       };
-      remove = jest.fn().mockResolvedValue(undefined);
+      removeOrThrow = jest.fn().mockResolvedValue(undefined);
       manager = new DocumentService(
         lib as unknown as DocumentRepository,
-        { remove } as unknown as S3Service,
+        { removeOrThrow } as unknown as S3Service,
         { enabled: true } as DocumentClient,
       );
     });
@@ -117,13 +117,38 @@ describe('Document upload and source boundaries', () => {
         ],
       });
       await manager.purge('owner', 'doc');
-      expect(remove.mock.calls.map(([key]) => key as string).sort()).toEqual([
-        'a2',
-        's1',
-        'u1',
-        'u2',
-      ]);
+      expect(
+        removeOrThrow.mock.calls.map(([key]) => key as string).sort(),
+      ).toEqual(['a2', 's1', 'u1', 'u2']);
       expect(lib.purge).toHaveBeenCalledWith('doc');
+    });
+    it('does not purge DB metadata after a partial storage deletion failure; retries safely', async () => {
+      const failure = new Error('storage unavailable');
+      lib.purgeTarget.mockResolvedValue({
+        id: 'doc',
+        is_deleted: false,
+        archived_at: new Date(),
+        purged_at: null,
+        versions: [
+          { id: 'v1', upload_key: 'u1', source_key: 's1', artifact_key: 'a1' },
+        ],
+      });
+      removeOrThrow
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(failure);
+      await expect(manager.purge('owner', 'doc')).rejects.toBe(failure);
+      expect(removeOrThrow.mock.calls).toEqual([['u1'], ['s1']]);
+      expect(lib.purge).not.toHaveBeenCalled();
+      await manager.purge('owner', 'doc');
+      expect(removeOrThrow.mock.calls.slice(2)).toEqual([
+        ['u1'],
+        ['s1'],
+        ['a1'],
+      ]);
+      expect(lib.purge).toHaveBeenCalledTimes(1);
+      expect(lib.purge.mock.invocationCallOrder[0]).toBeGreaterThan(
+        removeOrThrow.mock.invocationCallOrder.at(-1) ?? 0,
+      );
     });
     it('rejects purge unless archived/revoked and idle; replays when purged', async () => {
       lib.purgeTarget.mockResolvedValue({
@@ -154,10 +179,12 @@ describe('Document upload and source boundaries', () => {
         NotFoundException,
       );
       expect(lib.purge).not.toHaveBeenCalled();
-      expect(remove).not.toHaveBeenCalled();
+      expect(removeOrThrow).not.toHaveBeenCalled();
     });
     it('validates rename and hides foreign documents', async () => {
-      await expect(manager.rename('owner', 'doc', { title: '  ' })).rejects.toThrow();
+      await expect(
+        manager.rename('owner', 'doc', { title: '  ' }),
+      ).rejects.toThrow();
       await expect(
         manager.rename('owner', 'doc', { title: 'x', extra: 1 }),
       ).rejects.toThrow();
@@ -202,7 +229,11 @@ describe('Document upload and source boundaries', () => {
       duplicates: jest.Mock;
     };
     let repo: Repo;
-    let store: { getBoundedObject: jest.Mock; putBoundedObject: jest.Mock; remove: jest.Mock };
+    let store: {
+      getBoundedObject: jest.Mock;
+      putBoundedObject: jest.Mock;
+      remove: jest.Mock;
+    };
     let reuse: DocumentService;
     beforeEach(() => {
       store = {

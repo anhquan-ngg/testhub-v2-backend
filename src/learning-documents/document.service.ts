@@ -43,7 +43,6 @@ export class DocumentService {
       !(await this.repository.target(ownerId, value.topic_id, value.chapter_id))
     )
       throw new NotFoundException('Target unavailable');
-    await this.requireQuota(ownerId, value.upload.size, true);
     const id = randomUUID();
     const version = this.newVersion(id, value.upload);
     const signed = await this.storage.createUploadUrl(
@@ -74,7 +73,6 @@ export class DocumentService {
     if (!parsed.success)
       throw new BadRequestException('Invalid document upload or consent');
     await this.detail(ownerId, id);
-    await this.requireQuota(ownerId, parsed.data.size, false);
     const version = this.newVersion(id, parsed.data);
     const signed = await this.storage.createUploadUrl(
       version.upload_key,
@@ -241,7 +239,8 @@ export class DocumentService {
           parser_version: donor.parser_version,
           unit_count: donor.unit_count,
           warnings: donor.warnings as Prisma.InputJsonValue | null,
-          status: donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
+          status:
+            donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
         },
       );
       if (!changed.count) {
@@ -388,7 +387,9 @@ export class DocumentService {
     if (!target) throw new NotFoundException('Document unavailable');
     if (target.purged_at) return;
     if (!target.is_deleted && !target.archived_at)
-      throw new ConflictException('Archive or revoke the document before purge');
+      throw new ConflictException(
+        'Archive or revoke the document before purge',
+      );
     if (await this.repository.activeWork(id))
       throw new ConflictException('Document has active generation work');
     const keys = target.versions.flatMap((version) =>
@@ -396,7 +397,7 @@ export class DocumentService {
         (key): key is string => !!key,
       ),
     );
-    for (const key of keys) await this.storage.remove(key);
+    for (const key of keys) await this.storage.removeOrThrow(key);
     await this.repository.purge(id);
   }
 
@@ -422,15 +423,6 @@ export class DocumentService {
       documents: { used: used.documents, limit: limits.maxDocuments },
       bytes: { used: used.bytes, limit: limits.maxBytes },
     };
-  }
-
-  private async requireQuota(ownerId: string, size: number, newDocument: boolean) {
-    const limits = documentQuota();
-    const used = await this.repository.quota(ownerId);
-    if (newDocument && used.documents + 1 > limits.maxDocuments)
-      throw new ConflictException('Document library limit reached');
-    if (used.bytes + size > limits.maxBytes)
-      throw new ConflictException('Document storage quota exceeded');
   }
 
   private requireEnabled() {

@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { Prisma, UserRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { DOCUMENT_LEASE_MS } from './document.contract';
+import { DOCUMENT_LEASE_MS, documentQuota } from './document.contract';
 
 /** Business ownership and fenced processing state. No source text is stored here. */
 @Injectable()
@@ -46,7 +46,7 @@ export class DocumentRepository {
     });
   }
 
-  /** Atomically create the first immutable version of a document. */
+  /** Reserve owner quota and create the first immutable version atomically. */
   create(input: {
     id: string;
     ownerId: string;
@@ -55,44 +55,62 @@ export class DocumentRepository {
     chapterId: string | null;
     version: Prisma.LearningDocumentVersionUncheckedCreateWithoutDocumentInput;
   }) {
-    return this.prisma.learningDocument.create({
-      data: {
-        id: input.id,
-        created_by: input.ownerId,
-        title: input.title,
-        topic_id: input.topicId,
-        chapter_id: input.chapterId,
-        versions: { create: input.version },
+    return this.prisma.$transaction(
+      async (tx) => {
+        await this.reserveQuota(tx, {
+          ownerId: input.ownerId,
+          size: input.version.declared_size,
+          newDocument: true,
+        });
+        return tx.learningDocument.create({
+          data: {
+            id: input.id,
+            created_by: input.ownerId,
+            title: input.title,
+            topic_id: input.topicId,
+            chapter_id: input.chapterId,
+            versions: { create: input.version },
+          },
+          select: { id: true },
+        });
       },
-      select: { id: true },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
   }
 
-  /** Allocate replacement version numbers atomically; older sources are never overwritten. */
+  /** Reserve owner quota and allocate replacement version numbers atomically. */
   addVersion(
     ownerId: string,
     id: string,
     data: Prisma.LearningDocumentVersionUncheckedCreateWithoutDocumentInput,
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.learningDocument.updateMany({
-        where: { id, ...this.scope(ownerId) },
-        data: { next_version: { increment: 1 } },
-      });
-      if (!updated.count) return null;
-      const document = await tx.learningDocument.findUniqueOrThrow({
-        where: { id },
-        select: { next_version: true },
-      });
-      return tx.learningDocumentVersion.create({
-        data: {
-          ...data,
-          document_id: id,
-          version: document.next_version - 1,
-        },
-        select: { id: true },
-      });
-    });
+    return this.prisma.$transaction(
+      async (tx) => {
+        await this.reserveQuota(tx, {
+          ownerId,
+          size: data.declared_size,
+          newDocument: false,
+        });
+        const updated = await tx.learningDocument.updateMany({
+          where: { id, ...this.scope(ownerId) },
+          data: { next_version: { increment: 1 } },
+        });
+        if (!updated.count) return null;
+        const document = await tx.learningDocument.findUniqueOrThrow({
+          where: { id },
+          select: { next_version: true },
+        });
+        return tx.learningDocumentVersion.create({
+          data: {
+            ...data,
+            document_id: id,
+            version: document.next_version - 1,
+          },
+          select: { id: true },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
   }
 
   /** Return metadata only; object keys, leases and consent internals are private. */
@@ -312,12 +330,7 @@ export class DocumentRepository {
   }
 
   /** Paginate versions beyond the bounded list in the document summary. */
-  async versions(
-    ownerId: string,
-    id: string,
-    page: number,
-    limit: number,
-  ) {
+  async versions(ownerId: string, id: string, page: number, limit: number) {
     const where = { document_id: id, document: this.scope(ownerId) };
     const [data, total] = await this.prisma.$transaction([
       this.prisma.learningDocumentVersion.findMany({
@@ -371,14 +384,35 @@ export class DocumentRepository {
 
   /** Storage and document usage; failed uploads without a stored source are free. */
   async quota(ownerId: string) {
+    return this.prisma.$transaction((tx) => this.quotaUsage(tx, ownerId));
+  }
+
+  /** Lock the shared owner row before reading usage; hold it through commit/rollback. */
+  private async reserveQuota(
+    tx: Prisma.TransactionClient,
+    {
+      ownerId,
+      size,
+      newDocument,
+    }: { ownerId: string; size: number; newDocument: boolean },
+  ): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${ownerId}::uuid FOR UPDATE`;
+    const limits = documentQuota();
+    const used = await this.quotaUsage(tx, ownerId);
+    if (newDocument && used.documents + 1 > limits.maxDocuments)
+      throw new ConflictException('Document library limit reached');
+    if (used.bytes + size > limits.maxBytes)
+      throw new ConflictException('Document storage quota exceeded');
+  }
+
+  /** Keep usage rules identical for reporting and transactional admission. */
+  private async quotaUsage(tx: Prisma.TransactionClient, ownerId: string) {
     const document = { created_by: ownerId, is_deleted: false };
-    const [documents, bytes] = await this.prisma.$transaction([
-      this.prisma.learningDocument.count({ where: document }),
-      this.prisma.learningDocumentVersion.aggregate({
-        where: { document, NOT: { status: 'FAILED', source_key: null } },
-        _sum: { declared_size: true },
-      }),
-    ]);
+    const documents = await tx.learningDocument.count({ where: document });
+    const bytes = await tx.learningDocumentVersion.aggregate({
+      where: { document, NOT: { status: 'FAILED', source_key: null } },
+      _sum: { declared_size: true },
+    });
     return { documents, bytes: bytes._sum.declared_size ?? 0 };
   }
 

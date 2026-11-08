@@ -57,7 +57,7 @@ export class DocumentCleanup implements OnModuleInit, OnModuleDestroy {
     const rows = await this.repository.abandonedUploads(cutoff, CLEANUP_BATCH);
     let expired = 0;
     for (const row of rows) {
-      await this.storage.remove(row.upload_key);
+      await this.storage.removeOrThrow(row.upload_key);
       expired += (await this.repository.markUploadExpired(row.id)).count;
     }
     return expired;
