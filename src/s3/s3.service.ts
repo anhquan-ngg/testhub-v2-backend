@@ -228,13 +228,19 @@ export class S3Service implements OnModuleInit {
     return { url };
   }
 
+  /** Delete an object, propagating failures so callers can defer DB completion. */
+  async removeOrThrow(objectName: string): Promise<void> {
+    const command = new DeleteObjectCommand({
+      Bucket: this.bucketName,
+      Key: objectName,
+    });
+    await this.s3Client.send(command);
+  }
+
+  /** Best-effort deletion for callers that tolerate leftover objects. */
   async remove(objectName: string) {
     try {
-      const command = new DeleteObjectCommand({
-        Bucket: this.bucketName,
-        Key: objectName,
-      });
-      await this.s3Client.send(command);
+      await this.removeOrThrow(objectName);
     } catch (error: any) {
       console.warn(
         `S3Service: Could not remove object "${objectName}":`,

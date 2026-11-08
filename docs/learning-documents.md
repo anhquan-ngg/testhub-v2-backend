@@ -210,6 +210,21 @@ open work. Configure lifecycle/retention only after the policy is approved; no
 automatic purge or TTL is promised. Generation from an uploaded document is
 implemented; see the [RAG setup and file generation guide](rag-indexing.md).
 
+### Library quota and deletion guarantees (2026-11-08)
+
+The earlier retention snapshot above predates library management. Create and
+replacement uploads now check quota inside their write transaction, serialized
+by an owner row lock. Limits remain `DOCUMENT_MAX_ACTIVE_PER_OWNER` (default 100)
+and `DOCUMENT_MAX_TOTAL_BYTES_PER_OWNER` (default 500 MiB). Soft-deleted documents
+are excluded; archived documents still count. Failed uploads without a stored
+source consume no bytes but still count toward the document limit.
+
+Abandoned-upload cleanup and explicit purge delete objects before marking DB
+completion. Storage failures leave metadata retryable, including after partial
+deletion. Other storage callers retain best-effort removal. Broader artifact
+lifecycle/retention policy is still separate; this does not promise automatic
+document purge.
+
 ## Verification commands and boundaries
 
 ```powershell
@@ -217,7 +232,9 @@ implemented; see the [RAG setup and file generation guide](rag-indexing.md).
 .\.venv\Scripts\python.exe -m pytest -q
 
 # Backend unit/HTTP tests; optional suites skip without their explicit URLs:
-npm test -- learning-documents --runInBand
+npm test -- learning-documents s3.service.spec report-fonts.spec --runInBand
+# Owner quota scheduling/rollback uses offline transaction doubles; this does
+# not replace PostgreSQL lock integration verification.
 
 # Real Nest client → FastAPI → real PDF/PPTX parser, plus existing fake-LLM contract:
 $env:TESTHUB_AI_PYTHON = (Resolve-Path '..\testhub-ai-service\.venv\Scripts\python.exe').Path

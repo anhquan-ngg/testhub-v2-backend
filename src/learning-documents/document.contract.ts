@@ -5,6 +5,46 @@ export const DOCUMENT_RESULT_MAX_BYTES = 8 * 1024 * 1024;
 export const DOCUMENT_QUEUE = 'ai-document-processing';
 export const DOCUMENT_JOB = 'extract';
 export const DOCUMENT_LEASE_MS = 120_000;
+
+function positiveEnv(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/** Per-lecturer library limits; evaluated per call so deployments can tune them by env. */
+export function documentQuota() {
+  return {
+    maxDocuments: positiveEnv('DOCUMENT_MAX_ACTIVE_PER_OWNER', 100),
+    maxBytes: positiveEnv(
+      'DOCUMENT_MAX_TOTAL_BYTES_PER_OWNER',
+      500 * 1024 * 1024,
+    ),
+  };
+}
+
+/** Age after an upload reservation expires before staging objects are reclaimed. */
+export function uploadAbandonGraceMs() {
+  return positiveEnv('DOCUMENT_UPLOAD_ABANDON_GRACE_MS', 24 * 3600_000);
+}
+
+export const renameDocumentSchema = z
+  .object({ title: z.string().trim().min(1).max(200) })
+  .strict();
+
+export const listDocumentsQuerySchema = z
+  .object({
+    q: z.string().trim().max(200).optional(),
+    archived: z.enum(['true', 'false', 'all']).default('false'),
+  })
+  .strict();
+export type ListDocumentsQuery = z.infer<typeof listDocumentsQuerySchema>;
+/** Client-computed digest used only as a pre-upload hint; the server re-hashes at completion. */
+export const checkDuplicateSchema = z
+  .object({
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    source_type: z.enum(['PDF', 'PPTX']),
+  })
+  .strict();
 export const DOCUMENT_MIME = {
   PDF: 'application/pdf',
   PPTX: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',

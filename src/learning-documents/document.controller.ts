@@ -1,5 +1,6 @@
 import {
   ArgumentsHost,
+  BadRequestException,
   Body,
   Catch,
   Controller,
@@ -12,6 +13,7 @@ import {
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -33,6 +35,7 @@ import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { DocumentService } from './document.service';
+import { listDocumentsQuerySchema } from './document.contract';
 
 type LecturerRequest = Request & { user: { id: string } };
 
@@ -129,8 +132,46 @@ export class DocumentController {
     @Query('page', new ParseIntPipe({ optional: true })) page = 1,
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
     @Query('topic_id', new ParseUUIDPipe({ optional: true })) topic?: string,
+    @Query('q') q?: string,
+    @Query('archived') archived?: string,
   ) {
-    return this.service.list(req.user.id, page, limit, topic);
+    const filter = listDocumentsQuerySchema.safeParse({
+      ...(q === undefined ? {} : { q }),
+      ...(archived === undefined ? {} : { archived }),
+    });
+    if (!filter.success) throw new BadRequestException('Invalid filter');
+    return this.service.list(req.user.id, page, limit, topic, filter.data);
+  }
+
+  /** Declared before :id routes; reports owner-only exact-byte duplicates by SHA-256. */
+  @Post('duplicates/check')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Find owned documents with identical file bytes' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sha256', 'source_type'],
+      properties: {
+        sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        source_type: { type: 'string', enum: ['PDF', 'PPTX'] },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: '{data:[matching versions]}' })
+  checkDuplicate(@Req() req: LecturerRequest, @Body() body: unknown) {
+    return this.service.checkDuplicate(req.user.id, body);
+  }
+
+  /** Declared before :id so "quota" is never parsed as a document id. */
+  @Get('quota')
+  @ApiOperation({ summary: 'Read library document and storage usage' })
+  @ApiResponse({
+    status: 200,
+    description: '{documents:{used,limit},bytes:{used,limit}}',
+  })
+  quota(@Req() req: LecturerRequest) {
+    return this.service.quota(req.user.id);
   }
 
   /** Poll metadata without fetching source content. */
@@ -142,6 +183,82 @@ export class DocumentController {
   })
   detail(@Req() req: LecturerRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.service.detail(req.user.id, id);
+  }
+
+  /** Rename the document title; versions stay immutable. */
+  @Patch(':id')
+  @ApiOperation({ summary: 'Rename an owned document' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['title'],
+      properties: { title: { type: 'string', minLength: 1, maxLength: 200 } },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Updated document metadata' })
+  rename(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+  ) {
+    return this.service.rename(req.user.id, id, body);
+  }
+
+  /** Reversible hide that blocks new plans and batches. */
+  @Post(':id/archive')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Archive a document; indexes are kept' })
+  @ApiResponse({ status: 200, description: 'Updated document metadata' })
+  archive(@Req() req: LecturerRequest, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.archive(req.user.id, id);
+  }
+
+  /** Restore an archived document. */
+  @Post(':id/unarchive')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Restore an archived document' })
+  @ApiResponse({ status: 200, description: 'Updated document metadata' })
+  unarchive(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.service.unarchive(req.user.id, id);
+  }
+
+  /** Irreversible deletion of stored bytes; requires archive/revoke and no active work. */
+  @Post(':id/purge')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Permanently delete stored files of a document' })
+  @ApiResponse({ status: 204, description: 'Stored objects deleted; idempotent' })
+  @ApiResponse({ status: 409, description: 'Not archived/revoked or in use' })
+  purge(@Req() req: LecturerRequest, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.purge(req.user.id, id);
+  }
+
+  /** Paginate versions beyond the summary returned with the document. */
+  @Get(':id/versions')
+  @ApiOperation({ summary: 'List document versions with pagination' })
+  @ApiResponse({ status: 200, description: '{data,total,page,limit}' })
+  versions(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
+  ) {
+    return this.service.versions(req.user.id, id, page, limit);
+  }
+
+  /** Plans and batches that used this document. */
+  @Get(':id/history')
+  @ApiOperation({ summary: 'Read plan and batch history for a document' })
+  @ApiResponse({ status: 200, description: '{plans,batches}' })
+  history(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
+  ) {
+    return this.service.history(req.user.id, id, limit);
   }
 
   /** Upload a replacement source while retaining the previous source version. */

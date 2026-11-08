@@ -24,7 +24,7 @@ let cachedCss: string | null = null;
 /**
  * Builds self-contained `@font-face` rules for the Inter variable font used by
  * the web app, embedded as data URIs so Chromium needs no network or system font.
- * Returns an empty string when the font files are unavailable.
+ * Skips missing or unreadable subsets while retaining every readable font.
  */
 export function getInterFontFaceCss(): string {
   if (cachedCss !== null) return cachedCss;
@@ -32,8 +32,12 @@ export function getInterFontFaceCss(): string {
   cachedCss = INTER_SUBSETS.map(({ file, range }) => {
     const path = join(__dirname, 'fonts', file);
     if (!existsSync(path)) return '';
-    const data = readFileSync(path).toString('base64');
-    return `@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: block; src: url(data:font/woff2;base64,${data}) format('woff2'); unicode-range: ${range}; }`;
+    try {
+      const data = readFileSync(path).toString('base64');
+      return `@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: block; src: url(data:font/woff2;base64,${data}) format('woff2'); unicode-range: ${range}; }`;
+    } catch {
+      return '';
+    }
   }).join('\n');
 
   return cachedCss;
