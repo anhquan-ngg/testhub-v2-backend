@@ -1,5 +1,11 @@
 # AGENTS.md — testhub-v2-backend
 
+## Exam distribution delta (2026-11-01)
+
+- BY_TYPE/BY_CHAPTER exams may set Exam.distribution_delta (0..2, default 0): a global transfer budget keeping total N exact. Print always applies it; online only with distribution_delta_online. Reuse common/quota-planner.ts and common/distribution-delta.ts; never rewrite the saved distribution.
+- Submission.selection_metadata (slim versioned summary) is internal, not exposed to students; old rows are null. generateBlankExamPdf uses the baseline.
+- Two additive migrations (20261101090000, 20261101091000) are generated offline and not applied. See docs/exam-distribution-delta.md.
+
 ## Chapter hierarchy (2026-10-27)
 
 - Chapter.parent_id remains the adjacency list. Reuse common/chapter-tree.ts for cycle-safe recursive CTE traversal; do not assume root/direct-child depth.

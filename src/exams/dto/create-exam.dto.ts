@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   Min,
   MinLength,
 } from 'class-validator';
@@ -66,6 +67,29 @@ export class CreateExamDto {
   @IsOptional()
   @IsString()
   distribution?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Maximum number of questions that may shift between configured BY_TYPE/BY_CHAPTER groups per generated paper (0 disables). Total question count is preserved. Only valid for BY_TYPE and BY_CHAPTER.',
+    minimum: 0,
+    maximum: 2,
+    default: 0,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(2)
+  distribution_delta?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Opt-in: also vary the quota of each online attempt by `distribution_delta`. Print exams always follow `distribution_delta`.',
+    default: false,
+  })
+  @IsOptional()
+  @IsBoolean()
+  distribution_delta_online?: boolean;
 
   @ApiPropertyOptional({ default: false })
   @IsOptional()

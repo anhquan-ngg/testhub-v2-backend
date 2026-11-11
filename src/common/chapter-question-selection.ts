@@ -46,11 +46,15 @@ export function parseChapterDistribution(value: unknown): ChapterDistribution {
   return parsed.data;
 }
 
-/** Maximum bipartite matching via iterative augmenting paths; never greedily starve overlapping quotas. */
-export function allocateChapterQuestions(
+/**
+ * Maximum bipartite matching via iterative augmenting paths; never greedily
+ * starve overlapping quotas. Returns one question per slot (ordered by row),
+ * or null when the quotas cannot all be satisfied with distinct questions.
+ */
+export function matchChapterQuestions(
   rows: ChapterDistribution,
   candidates: string[][],
-): string[] {
+): string[] | null {
   const slots = rows.flatMap((row, index) =>
     Array.from({ length: row.quantity }, () => index),
   );
@@ -79,14 +83,7 @@ export function allocateChapterQuestions(
         }
       }
     }
-    if (!available)
-      throw new BadRequestException({
-        statusCode: 400,
-        error: 'Bad Request',
-        code: 'CHAPTER_DISTRIBUTION_INSUFFICIENT',
-        message:
-          'Not enough distinct questions to satisfy all BY_CHAPTER rows, including overlapping subtrees',
-      });
+    if (!available) return null;
     while (available) {
       const slot = via.get(available);
       if (slot === undefined)
@@ -100,13 +97,29 @@ export function allocateChapterQuestions(
   return slots.map((_, index) => assignments.get(index) ?? '');
 }
 
-/** Fetch candidates once per distinct chapter in one SQL snapshot, then satisfy disjoint quotas. */
-export async function selectChapterQuestionIds(
+/** Same as `matchChapterQuestions` but throws the public 400 on shortage. */
+export function allocateChapterQuestions(
+  rows: ChapterDistribution,
+  candidates: string[][],
+): string[] {
+  const matched = matchChapterQuestions(rows, candidates);
+  if (!matched)
+    throw new BadRequestException({
+      statusCode: 400,
+      error: 'Bad Request',
+      code: 'CHAPTER_DISTRIBUTION_INSUFFICIENT',
+      message:
+        'Not enough distinct questions to satisfy all BY_CHAPTER rows, including overlapping subtrees',
+    });
+  return matched;
+}
+
+/** Fetch candidates once per distinct chapter (including active subtrees) in one SQL snapshot, aligned with `rows`. */
+export async function loadChapterCandidates(
   db: Prisma.TransactionClient,
   topicId: string,
-  value: unknown,
-): Promise<string[]> {
-  const rows = parseChapterDistribution(value);
+  rows: ChapterDistribution,
+): Promise<string[][]> {
   const expanded = await db.$queryRaw<
     Array<{ chapter_id: string; question_id: string | null }>
   >(Prisma.sql`
@@ -130,8 +143,20 @@ export async function selectChapterQuestionIds(
     if (entry.question_id) questions.push(entry.question_id);
     byChapter.set(chapterId, questions);
   }
-  const candidates = rows.map(
-    (row) => byChapter.get(row.chapter_id.toLowerCase()) ?? [],
-  );
+  return rows.map((row) => byChapter.get(row.chapter_id.toLowerCase()) ?? []);
+}
+
+/**
+ * Satisfies disjoint quotas. `quotaOverride` (a delta-planned variant of the
+ * saved distribution) replaces the saved quantities but must keep the same chapters.
+ */
+export async function selectChapterQuestionIds(
+  db: Prisma.TransactionClient,
+  topicId: string,
+  value: unknown,
+  quotaOverride?: ChapterDistribution,
+): Promise<string[]> {
+  const rows = quotaOverride ?? parseChapterDistribution(value);
+  const candidates = await loadChapterCandidates(db, topicId, rows);
   return allocateChapterQuestions(rows, candidates);
 }

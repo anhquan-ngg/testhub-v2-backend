@@ -7,6 +7,7 @@ import {
 } from './question-distribution.constants';
 import {
   allocateChapterQuestions,
+  matchChapterQuestions,
   parseChapterDistribution,
   selectChapterQuestionIds,
 } from './chapter-question-selection';
@@ -148,5 +149,15 @@ describe('Chapter distribution matching', () => {
         result.forEach((id, i) => expect(pools[i]).toContain(id));
       } else expect(() => allocateChapterQuestions(rows, pools)).toThrow();
     }
+  });
+});
+
+describe('matchChapterQuestions', () => {
+  it('returns null instead of throwing when quotas cannot be satisfied', () => {
+    const rows = [
+      { chapter_id: '00000000-0000-4000-8000-000000000001', quantity: 3 },
+    ];
+    expect(matchChapterQuestions(rows, [['a', 'b']])).toBeNull();
+    expect(matchChapterQuestions(rows, [['a', 'b', 'c']])).toHaveLength(3);
   });
 });

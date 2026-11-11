@@ -152,35 +152,35 @@ enum ExamViolationSource {
 }
 
 model User {
-  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  created_at            DateTime           @default(now())
-  updated_at            DateTime           @updatedAt
-  full_name             String
-  email                 String             @unique
-  password              String?
-  role                  UserRole           @default(STUDENT)
-  status                UserStatus         @default(ACTIVE)
-  school                String?
-  phone                 String?
-  address               String?
-  accounts              Account[]
-  authSessions          AuthSession[] @relation("SessionOwner")
-  approvedAuthSessions  AuthSession[] @relation("SessionApprover")
-  exams                 Exam[]
-  topics                Topic[]
-  submissions           Submission[]
-  registrations         ExamRegistration[]
-  violations            ExamViolation[]
-  retryGrantsReceived   ExamRetryGrant[]   @relation("ExamRetryGrantStudent")
-  retryGrantsGiven      ExamRetryGrant[]   @relation("ExamRetryGrantGranter")
-  receivedNotifications Notification[]     @relation("ReceivedNotifications")
-  sentNotifications     Notification[]     @relation("SentNotifications")
-  files                 File[]             @relation("UploadedFiles")
-  questionImports       QuestionImport[]
+  id                        String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at                DateTime                   @default(now())
+  updated_at                DateTime                   @updatedAt
+  full_name                 String
+  email                     String                     @unique
+  password                  String?
+  role                      UserRole                   @default(STUDENT)
+  status                    UserStatus                 @default(ACTIVE)
+  school                    String?
+  phone                     String?
+  address                   String?
+  accounts                  Account[]
+  authSessions              AuthSession[]              @relation("SessionOwner")
+  approvedAuthSessions      AuthSession[]              @relation("SessionApprover")
+  exams                     Exam[]
+  topics                    Topic[]
+  submissions               Submission[]
+  registrations             ExamRegistration[]
+  violations                ExamViolation[]
+  retryGrantsReceived       ExamRetryGrant[]           @relation("ExamRetryGrantStudent")
+  retryGrantsGiven          ExamRetryGrant[]           @relation("ExamRetryGrantGranter")
+  receivedNotifications     Notification[]             @relation("ReceivedNotifications")
+  sentNotifications         Notification[]             @relation("SentNotifications")
+  files                     File[]                     @relation("UploadedFiles")
+  questionImports           QuestionImport[]
   questionGenerationBatches QuestionGenerationBatch[]
   questionGenerationReviews QuestionGenerationReview[]
-  learningDocuments LearningDocument[]
-  knowledgePlans KnowledgePlan[]
+  learningDocuments         LearningDocument[]
+  knowledgePlans            KnowledgePlan[]
 
   @@index([role])
   @@index([status])
@@ -188,27 +188,27 @@ model User {
 }
 
 model AuthSession {
-  id                    String   @id @db.Uuid
-  user_id               String   @db.Uuid
-  status                String   @default("ACTIVE")
+  id                    String    @id @db.Uuid
+  user_id               String    @db.Uuid
+  status                String    @default("ACTIVE")
   /// Unique nullable slot, set to user_id only for an ACTIVE student session.
-  student_slot          String?  @unique @db.Uuid
-  created_at            DateTime @default(now())
+  student_slot          String?   @unique @db.Uuid
+  created_at            DateTime  @default(now())
   expires_at            DateTime
   revoked_at            DateTime?
   refresh_token_hash    String
   /// Short-lived proof permits safe replay if the browser loses confirmation response.
   transfer_token_hash   String?
-  refresh_jti           String   @db.Uuid
+  refresh_jti           String    @db.Uuid
   refresh_issued_at     Int
   previous_refresh_hash String?
   previous_valid_until  DateTime?
-  previous_session_id   String?  @db.Uuid
-  approval_required     Boolean  @default(false)
-  approved_by           String?  @db.Uuid
+  previous_session_id   String?   @db.Uuid
+  approval_required     Boolean   @default(false)
+  approved_by           String?   @db.Uuid
   approved_at           DateTime?
-  user                  User     @relation("SessionOwner", fields: [user_id], references: [id], onDelete: Cascade)
-  approver              User?    @relation("SessionApprover", fields: [approved_by], references: [id], onDelete: SetNull)
+  user                  User      @relation("SessionOwner", fields: [user_id], references: [id], onDelete: Cascade)
+  approver              User?     @relation("SessionApprover", fields: [approved_by], references: [id], onDelete: SetNull)
 
   @@index([user_id, status, expires_at])
   @@map("auth_sessions")
@@ -232,30 +232,33 @@ model Account {
 }
 
 model Exam {
-  id              String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  is_deleted      Boolean            @default(false)
-  deleted_at      DateTime?
-  created_at      DateTime           @default(now())
-  updated_at      DateTime           @updatedAt
-  lecturer_id     String             @db.Uuid
-  topic_id        String             @db.Uuid
-  title           String
-  exam_start_time DateTime
-  exam_end_time   DateTime
-  duration        Int
-  practice        Boolean            @default(false)
-  mode            ExamMode           @default(MANUAL)
-  sample_size     Int?
-  distribution    String?
-  is_public       Boolean            @default(false)
-  submissions     Submission[]
-  questions       ExamQuestions[]
-  registrations   ExamRegistration[]
-  violations      ExamViolation[]
-  retryGrants     ExamRetryGrant[]
-  questionImports QuestionImport[]
-  lecturer        User               @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
-  topic           Topic              @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  id                        String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_deleted                Boolean            @default(false)
+  deleted_at                DateTime?
+  created_at                DateTime           @default(now())
+  updated_at                DateTime           @updatedAt
+  lecturer_id               String             @db.Uuid
+  topic_id                  String             @db.Uuid
+  title                     String
+  exam_start_time           DateTime
+  exam_end_time             DateTime
+  duration                  Int
+  practice                  Boolean            @default(false)
+  mode                      ExamMode           @default(MANUAL)
+  sample_size               Int?
+  distribution              String?
+  distribution_delta        Int                @default(0)
+  /// Opt-in: also vary the per-student quota of online attempts by `distribution_delta`.
+  distribution_delta_online Boolean            @default(false)
+  is_public                 Boolean            @default(false)
+  submissions               Submission[]
+  questions                 ExamQuestions[]
+  registrations             ExamRegistration[]
+  violations                ExamViolation[]
+  retryGrants               ExamRetryGrant[]
+  questionImports           QuestionImport[]
+  lecturer                  User               @relation(fields: [lecturer_id], references: [id], onDelete: Cascade)
+  topic                     Topic              @relation(fields: [topic_id], references: [id], onDelete: Cascade)
 
   @@index([lecturer_id])
   @@index([topic_id])
@@ -271,37 +274,37 @@ model Topic {
   created_by String    @db.Uuid
   name       String
 
-  exams           Exam[]
-  chapters        Chapter[]
-  creator         User             @relation(fields: [created_by], references: [id], onDelete: Cascade)
-  questionImports QuestionImport[]
+  exams                     Exam[]
+  chapters                  Chapter[]
+  creator                   User                      @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  questionImports           QuestionImport[]
   questionGenerationBatches QuestionGenerationBatch[]
-  learningDocuments LearningDocument[]
-  knowledgePlans KnowledgePlan[]
+  learningDocuments         LearningDocument[]
+  knowledgePlans            KnowledgePlan[]
 
   @@index([created_by])
   @@map("topics")
 }
 
 model Chapter {
-  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  is_deleted             Boolean              @default(false)
-  deleted_at             DateTime?
-  created_at             DateTime             @default(now())
-  updated_at             DateTime             @updatedAt
-  topic_id               String               @db.Uuid
-  parent_id              String?              @db.Uuid
-  name                   String
-  order                  Int
-  topic                  Topic                @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  parent                 Chapter?             @relation("ChapterToChapter", fields: [parent_id], references: [id], onDelete: Cascade)
-  children               Chapter[]            @relation("ChapterToChapter")
-  questions              Question[]
-  defaultQuestionImports QuestionImport[]     @relation("QuestionImportDefaultChapter")
-  questionImportItems    QuestionImportItem[] @relation("QuestionImportItemChapter")
+  id                        String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_deleted                Boolean                   @default(false)
+  deleted_at                DateTime?
+  created_at                DateTime                  @default(now())
+  updated_at                DateTime                  @updatedAt
+  topic_id                  String                    @db.Uuid
+  parent_id                 String?                   @db.Uuid
+  name                      String
+  order                     Int
+  topic                     Topic                     @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  parent                    Chapter?                  @relation("ChapterToChapter", fields: [parent_id], references: [id], onDelete: Cascade)
+  children                  Chapter[]                 @relation("ChapterToChapter")
+  questions                 Question[]
+  defaultQuestionImports    QuestionImport[]          @relation("QuestionImportDefaultChapter")
+  questionImportItems       QuestionImportItem[]      @relation("QuestionImportItemChapter")
   questionGenerationBatches QuestionGenerationBatch[]
-  learningDocuments LearningDocument[]
-  mappedGenerationItems QuestionGenerationItem[] @relation("GenerationMappedChapter")
+  learningDocuments         LearningDocument[]
+  mappedGenerationItems     QuestionGenerationItem[]  @relation("GenerationMappedChapter")
 
   @@index([topic_id, order])
   @@index([parent_id])
@@ -309,31 +312,33 @@ model Chapter {
 }
 
 model Submission {
-  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  is_deleted  Boolean               @default(false)
-  deleted_at  DateTime?
-  created_at  DateTime              @default(now())
-  updated_at  DateTime              @updatedAt
-  exam_id     String                @db.Uuid
-  student_id  String                @db.Uuid
-  total_score Decimal?              @db.Decimal(10, 2)
-  grading_revision Int              @default(0)
-  regradeDraft SubmissionRegradeDraft?
+  id                  String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_deleted          Boolean                        @default(false)
+  deleted_at          DateTime?
+  created_at          DateTime                       @default(now())
+  updated_at          DateTime                       @updatedAt
+  exam_id             String                         @db.Uuid
+  student_id          String                         @db.Uuid
+  total_score         Decimal?                       @db.Decimal(10, 2)
+  grading_revision    Int                            @default(0)
+  regradeDraft        SubmissionRegradeDraft?
   regradePublications SubmissionRegradePublication[]
-  rating      SubmissionRating?
-  start_time  DateTime?
-  end_time    DateTime?
-  status      SubmissionStatus      @default(IN_PROGRESS)
+  rating              SubmissionRating?
+  start_time          DateTime?
+  end_time            DateTime?
+  status              SubmissionStatus               @default(IN_PROGRESS)
   /// Effective auto-submit deadline for this attempt. Set at start (now +
   /// duration, capped by exam_end_time) and pushed back by a lecturer's
   /// "extend time" grant — the BullMQ auto-submit job and the overdue
   /// safety net both key off this instead of the static exam duration.
-  auto_submit_at DateTime?
-  questions   SubmissionQuestions[]
-  violations  ExamViolation[]
-  exam        Exam                  @relation(fields: [exam_id], references: [id], onDelete: Cascade)
-  student     User                  @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  session     ExamSession?
+  auto_submit_at      DateTime?
+  /// Slim, versioned DistributionDeltaSummary describing how this attempt's quota was derived. Null for legacy/non-delta attempts.
+  selection_metadata  Json?
+  questions           SubmissionQuestions[]
+  violations          ExamViolation[]
+  exam                Exam                           @relation(fields: [exam_id], references: [id], onDelete: Cascade)
+  student             User                           @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  session             ExamSession?
 
   @@index([exam_id])
   @@index([student_id])
@@ -344,13 +349,13 @@ model Submission {
 }
 
 model Question {
-  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  is_deleted      Boolean               @default(false)
+  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  is_deleted      Boolean                 @default(false)
   deleted_at      DateTime?
-  created_at      DateTime              @default(now())
-  updated_at      DateTime              @updatedAt
+  created_at      DateTime                @default(now())
+  updated_at      DateTime                @updatedAt
   question_text   String
-  chapter_id      String                @db.Uuid
+  chapter_id      String                  @db.Uuid
   options         String?
   correct_answer  String?
   question_type   QuestionType
@@ -358,7 +363,7 @@ model Question {
   submissions     SubmissionQuestions[]
   exams           ExamQuestions[]
   files           QuestionFiles[]
-  chapter         Chapter               @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  chapter         Chapter                 @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
   importItems     QuestionImportItem[]
   generationItem  QuestionGenerationItem?
 
@@ -474,28 +479,28 @@ model SubmissionQuestions {
 }
 
 model SubmissionRegradeDraft {
-  submission_id       String   @id @db.Uuid
+  submission_id       String     @id @db.Uuid
   revision            Int
   base_grade_revision Int
   published_revision  Int?
   scores              Json
-  reason              String   @db.VarChar(2000)
-  grader_id           String   @db.Uuid
-  updated_at          DateTime @updatedAt
+  reason              String     @db.VarChar(2000)
+  grader_id           String     @db.Uuid
+  updated_at          DateTime   @updatedAt
   submission          Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
 
   @@map("submission_regrade_drafts")
 }
 
 model SubmissionRegradePublication {
-  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  submission_id        String   @db.Uuid
+  id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submission_id        String     @db.Uuid
   revision             Int
-  grader_id            String   @db.Uuid
-  created_at           DateTime @default(now())
-  reason               String   @db.VarChar(2000)
-  previous_total_score Decimal? @db.Decimal(10, 2)
-  total_score          Decimal  @db.Decimal(10, 2)
+  grader_id            String     @db.Uuid
+  created_at           DateTime   @default(now())
+  reason               String     @db.VarChar(2000)
+  previous_total_score Decimal?   @db.Decimal(10, 2)
+  total_score          Decimal    @db.Decimal(10, 2)
   changes              Json
   submission           Submission @relation(fields: [submission_id], references: [id], onDelete: Cascade)
 
@@ -619,51 +624,51 @@ model QuestionImportAsset {
 }
 
 model QuestionGenerationBatch {
-  id               String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  created_at       DateTime                      @default(now())
-  updated_at       DateTime                      @updatedAt
-  created_by       String                        @db.Uuid
-  topic_id         String                        @db.Uuid
-  chapter_id       String?                       @db.Uuid
-  plan_id          String?                       @db.Uuid
-  plan_snapshot    Json?
-  contract_version String                        @default("text-generation.v1")
-  idempotency_key  String                        @db.VarChar(128)
-  request_hash     String                        @db.Char(64)
-  source_text      String
-  source_mode      String                        @default("text")
+  id                String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at        DateTime                      @default(now())
+  updated_at        DateTime                      @updatedAt
+  created_by        String                        @db.Uuid
+  topic_id          String                        @db.Uuid
+  chapter_id        String?                       @db.Uuid
+  plan_id           String?                       @db.Uuid
+  plan_snapshot     Json?
+  contract_version  String                        @default("text-generation.v1")
+  idempotency_key   String                        @db.VarChar(128)
+  request_hash      String                        @db.Char(64)
+  source_text       String
+  source_mode       String                        @default("text")
   source_version_id String?                       @db.Uuid
   source_index_id   String?                       @db.Uuid
   source_profile_id String?                       @db.Char(64)
   source_query      String?
   preparation_stage String?
-  sourceVersion     LearningDocumentVersion?     @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
-  sourceIndex       LearningDocumentIndex?       @relation(fields: [source_index_id], references: [id], onDelete: NoAction)
+  sourceVersion     LearningDocumentVersion?      @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
+  sourceIndex       LearningDocumentIndex?        @relation(fields: [source_index_id], references: [id], onDelete: NoAction)
   /// Legacy summary of the first question_configs row; read question_configs.
-  question_type    QuestionType                  @default(SINGLE_CHOICE)
+  question_type     QuestionType                  @default(SINGLE_CHOICE)
   /// Legacy summary of the first question_configs row; read question_configs.
-  question_format  QuestionFormat
+  question_format   QuestionFormat
   /// Ordered [{question_type, question_format, count}] rows requested for generation.
-  question_configs Json
+  question_configs  Json
   /// Total of question_configs counts.
-  requested_count  Int
-  language         String                        @default("vi")
-  consented_at     DateTime
-  status           QuestionGenerationBatchStatus @default(QUEUED)
-  total_items      Int                           @default(0)
-  error_code       String?
-  execution_id     String?                       @db.Uuid
-  lease_expires_at DateTime?
-  started_at       DateTime?
-  finished_at      DateTime?
-  creator          User                          @relation(fields: [created_by], references: [id], onDelete: Cascade)
-  topic            Topic                         @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  chapter          Chapter?                      @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
-  plan             KnowledgePlan?                @relation(fields: [plan_id], references: [id], onDelete: NoAction)
-  items            QuestionGenerationItem[]
-  attempts         QuestionGenerationAttempt[]
-  outbox           QuestionGenerationOutbox?
-  reviews          QuestionGenerationReview[]
+  requested_count   Int
+  language          String                        @default("vi")
+  consented_at      DateTime
+  status            QuestionGenerationBatchStatus @default(QUEUED)
+  total_items       Int                           @default(0)
+  error_code        String?
+  execution_id      String?                       @db.Uuid
+  lease_expires_at  DateTime?
+  started_at        DateTime?
+  finished_at       DateTime?
+  creator           User                          @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic             Topic                         @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  chapter           Chapter?                      @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  plan              KnowledgePlan?                @relation(fields: [plan_id], references: [id], onDelete: NoAction)
+  items             QuestionGenerationItem[]
+  attempts          QuestionGenerationAttempt[]
+  outbox            QuestionGenerationOutbox?
+  reviews           QuestionGenerationReview[]
 
   @@unique([created_by, idempotency_key])
   @@index([created_by, created_at(sort: Desc)])
@@ -675,29 +680,29 @@ model QuestionGenerationBatch {
 }
 
 model QuestionGenerationItem {
-  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  created_at    DateTime                     @default(now())
-  updated_at    DateTime                     @updatedAt
-  batch_id      String                       @db.Uuid
-  source_index  Int
-  plan_item_id  String?
-  target_chapter_id String? @db.Uuid
-  mappedChapter Chapter? @relation("GenerationMappedChapter", fields: [target_chapter_id], references: [id], onDelete: SetNull)
-  revision      Int                          @default(1)
-  original_data Json
-  provenance    Json?
-  data          Json
-  errors        Json
-  warnings      Json
-  fingerprint   String                       @db.Char(64)
-  status        QuestionGenerationItemStatus @default(VALID)
-  question_id   String?                      @unique @db.Uuid
-  reviewed_by   String?                      @db.Uuid
-  reviewed_at   DateTime?
-  committed_at  DateTime?
-  batch         QuestionGenerationBatch      @relation(fields: [batch_id], references: [id], onDelete: Cascade)
-  question      Question?                    @relation(fields: [question_id], references: [id], onDelete: SetNull)
-  reviews       QuestionGenerationReview[]
+  id                String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at        DateTime                     @default(now())
+  updated_at        DateTime                     @updatedAt
+  batch_id          String                       @db.Uuid
+  source_index      Int
+  plan_item_id      String?
+  target_chapter_id String?                      @db.Uuid
+  mappedChapter     Chapter?                     @relation("GenerationMappedChapter", fields: [target_chapter_id], references: [id], onDelete: SetNull)
+  revision          Int                          @default(1)
+  original_data     Json
+  provenance        Json?
+  data              Json
+  errors            Json
+  warnings          Json
+  fingerprint       String                       @db.Char(64)
+  status            QuestionGenerationItemStatus @default(VALID)
+  question_id       String?                      @unique @db.Uuid
+  reviewed_by       String?                      @db.Uuid
+  reviewed_at       DateTime?
+  committed_at      DateTime?
+  batch             QuestionGenerationBatch      @relation(fields: [batch_id], references: [id], onDelete: Cascade)
+  question          Question?                    @relation(fields: [question_id], references: [id], onDelete: SetNull)
+  reviews           QuestionGenerationReview[]
 
   @@unique([batch_id, source_index])
   @@index([batch_id, status])
@@ -769,21 +774,21 @@ enum LearningDocumentStatus {
 }
 
 model LearningDocument {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  created_at   DateTime @default(now())
-  updated_at   DateTime @updatedAt
-  created_by   String   @db.Uuid
-  topic_id     String   @db.Uuid
-  chapter_id   String?  @db.Uuid
-  title        String   @db.VarChar(200)
-  is_deleted   Boolean  @default(false)
-  next_version Int      @default(2)
+  id           String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at   DateTime                  @default(now())
+  updated_at   DateTime                  @updatedAt
+  created_by   String                    @db.Uuid
+  topic_id     String                    @db.Uuid
+  chapter_id   String?                   @db.Uuid
+  title        String                    @db.VarChar(200)
+  is_deleted   Boolean                   @default(false)
+  next_version Int                       @default(2)
   archived_at  DateTime?
   last_used_at DateTime?
   purged_at    DateTime?
-  creator      User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
-  topic        Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  chapter      Chapter? @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
+  creator      User                      @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic        Topic                     @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  chapter      Chapter?                  @relation(fields: [chapter_id], references: [id], onDelete: Cascade)
   versions     LearningDocumentVersion[]
 
   @@index([created_by, created_at(sort: Desc)])
@@ -794,76 +799,75 @@ model LearningDocument {
 }
 
 model LearningDocumentVersion {
-  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  document_id       String                 @db.Uuid
+  id                String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  document_id       String                    @db.Uuid
   version           Int
-  created_at        DateTime               @default(now())
-  updated_at        DateTime               @updatedAt
-  file_name         String                 @db.VarChar(200)
+  created_at        DateTime                  @default(now())
+  updated_at        DateTime                  @updatedAt
+  file_name         String                    @db.VarChar(200)
   source_type       LearningDocumentType
   mime_type         String
   declared_size     Int
-  include_notes     Boolean                @default(false)
+  include_notes     Boolean                   @default(false)
   consented_at      DateTime
-  upload_key        String                 @unique
+  upload_key        String                    @unique
   upload_expires_at DateTime
-  source_key        String?                @unique
-  source_sha256     String?                @db.Char(64)
-  artifact_key      String?                @unique
-  artifact_sha256   String?                @db.Char(64)
+  source_key        String?                   @unique
+  source_sha256     String?                   @db.Char(64)
+  artifact_key      String?                   @unique
+  artifact_sha256   String?                   @db.Char(64)
   parser_version    String?
   unit_count        Int?
   warnings          Json?
-  status            LearningDocumentStatus @default(UPLOADING)
+  status            LearningDocumentStatus    @default(UPLOADING)
   error_code        String?
-  execution_id      String?                @db.Uuid
+  execution_id      String?                   @db.Uuid
   lease_expires_at  DateTime?
-  extraction_count  Int                    @default(0)
-  next_dispatch_at  DateTime               @default(now())
-  dispatch_count    Int                    @default(0)
-  document          LearningDocument       @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  extraction_count  Int                       @default(0)
+  next_dispatch_at  DateTime                  @default(now())
+  dispatch_count    Int                       @default(0)
+  document          LearningDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
   indexes           LearningDocumentIndex[]
+  generationBatches QuestionGenerationBatch[]
+  knowledgePlans    KnowledgePlan[]
 
   @@unique([document_id, version])
   @@index([status, next_dispatch_at])
   @@index([status, lease_expires_at])
   @@index([source_sha256])
   @@map("learning_document_versions")
-  generationBatches QuestionGenerationBatch[]
-  knowledgePlans KnowledgePlan[]
-
 }
 
 /// A lecturer-reviewed content tree and topic × cognitive-level matrix.
 /// Approval freezes a plan; only approved question commit may create bank chapters.
 model KnowledgePlan {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  created_at        DateTime @default(now())
-  updated_at        DateTime @updatedAt
-  created_by        String   @db.Uuid
-  topic_id          String   @db.Uuid
-  source_version_id String   @db.Uuid
-  source_index_id   String?  @db.Uuid
-  source_profile_id String?  @db.Char(64)
-  source_sha256     String?  @db.Char(64)
-  status            String   @default("WAITING_SOURCE")
-  revision          Int      @default(1)
+  id                String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at        DateTime                  @default(now())
+  updated_at        DateTime                  @updatedAt
+  created_by        String                    @db.Uuid
+  topic_id          String                    @db.Uuid
+  source_version_id String                    @db.Uuid
+  source_index_id   String?                   @db.Uuid
+  source_profile_id String?                   @db.Char(64)
+  source_sha256     String?                   @db.Char(64)
+  status            String                    @default("WAITING_SOURCE")
+  revision          Int                       @default(1)
   question_configs  Json
   idempotency_key   String
-  request_hash      String @db.Char(64)
+  request_hash      String                    @db.Char(64)
   content_map       Json?
   matrix            Json?
-  execution_id      String?  @db.Uuid
+  execution_id      String?                   @db.Uuid
   lease_expires_at  DateTime?
-  next_prepare_at   DateTime @default(now())
+  next_prepare_at   DateTime                  @default(now())
   error_code        String?
-  creator           User     @relation(fields: [created_by], references: [id], onDelete: Cascade)
-  topic             Topic    @relation(fields: [topic_id], references: [id], onDelete: Cascade)
-  sourceVersion     LearningDocumentVersion @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
+  creator           User                      @relation(fields: [created_by], references: [id], onDelete: Cascade)
+  topic             Topic                     @relation(fields: [topic_id], references: [id], onDelete: Cascade)
+  sourceVersion     LearningDocumentVersion   @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
   batches           QuestionGenerationBatch[]
 
-  @@index([created_by, created_at(sort: Desc)])
   @@unique([created_by, idempotency_key])
+  @@index([created_by, created_at(sort: Desc)])
   @@index([status, next_prepare_at])
   @@index([source_version_id])
   @@map("knowledge_plans")
@@ -878,33 +882,32 @@ enum LearningDocumentIndexStatus {
 }
 
 model LearningDocumentIndex {
-  id                 String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  version_id         String                      @db.Uuid
-  owner_id           String                      @db.Uuid
-  profile_id         String                      @db.Char(64)
-  profile            Json
-  status             LearningDocumentIndexStatus @default(QUEUED)
-  prepared           Boolean                     @default(false)
-  chunk_count        Int                         @default(0)
-  completed_chunks   Int                         @default(0)
-  step_count         Int                         @default(0)
-  failure_count      Int                         @default(0)
-  error_code         String?
-  execution_id       String?                     @db.Uuid
-  lease_expires_at   DateTime?
-  next_dispatch_at   DateTime                    @default(now())
-  dispatch_count     Int                         @default(0)
-  remote_revoked     Boolean                     @default(false)
-  created_at         DateTime                    @default(now())
-  updated_at         DateTime                    @updatedAt
-  version            LearningDocumentVersion     @relation(fields: [version_id], references: [id], onDelete: Cascade)
+  id                String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  version_id        String                      @db.Uuid
+  owner_id          String                      @db.Uuid
+  profile_id        String                      @db.Char(64)
+  profile           Json
+  status            LearningDocumentIndexStatus @default(QUEUED)
+  prepared          Boolean                     @default(false)
+  chunk_count       Int                         @default(0)
+  completed_chunks  Int                         @default(0)
+  step_count        Int                         @default(0)
+  failure_count     Int                         @default(0)
+  error_code        String?
+  execution_id      String?                     @db.Uuid
+  lease_expires_at  DateTime?
+  next_dispatch_at  DateTime                    @default(now())
+  dispatch_count    Int                         @default(0)
+  remote_revoked    Boolean                     @default(false)
+  created_at        DateTime                    @default(now())
+  updated_at        DateTime                    @updatedAt
+  version           LearningDocumentVersion     @relation(fields: [version_id], references: [id], onDelete: Cascade)
+  generationBatches QuestionGenerationBatch[]
 
   @@unique([version_id, profile_id])
   @@index([status, next_dispatch_at])
   @@index([status, lease_expires_at])
   @@map("learning_document_indexes")
-  generationBatches QuestionGenerationBatch[]
-
 }
 
 model Notification {

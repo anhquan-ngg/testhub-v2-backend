@@ -1,5 +1,12 @@
 import { parseChapterDistribution } from '../common/chapter-question-selection';
+import { parseTypeDistribution } from '../common/question-distribution';
 import {
+  checkChapterDeltaFeasibility,
+  checkTypeDeltaFeasibility,
+  type DeltaFeasibility,
+} from '../common/distribution-delta';
+import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -10,28 +17,123 @@ import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
 import { QueryExamDto } from './dto/query-exam.dto';
 import { ExamRuntimeQueueService } from '@/exam-runtime/exam-runtime-queue.service';
+import { ExamRuntimeService } from '@/exam-runtime/exam-runtime.service';
+import { CheckDistributionDeltaDto } from './dto/check-distribution-delta.dto';
 
 @Injectable()
 export class ExamsService {
   constructor(
     private readonly examsRepository: ExamsRepository,
     private readonly examRuntimeQueue: ExamRuntimeQueueService,
+    private readonly examRuntime: ExamRuntimeService,
   ) {}
 
   async create(lecturerId: string, dto: CreateExamDto) {
-    if (dto.mode === 'BY_CHAPTER') {
-      const distribution = JSON.stringify(
-        parseChapterDistribution(dto.distribution),
-      );
-      dto = { ...dto, distribution };
-      await this.examsRepository.validateChapterDistribution(
-        dto.topic_id,
-        distribution,
-      );
-    }
+    dto = await this.prepareDistribution(dto, null);
     const exam = await this.examsRepository.create(lecturerId, dto);
     await this.examRuntimeQueue.scheduleExam(exam);
     return exam;
+  }
+
+  /**
+   * Validates the distribution contract and resolves `distribution_delta`.
+   * Omitted fields keep the stored value on update; the delta is validated
+   * against the effective (merged) mode and reset when the mode cannot use it.
+   */
+  private async prepareDistribution<T extends UpdateExamDto>(
+    dto: T,
+    current: {
+      mode: string;
+      topic_id: string;
+      distribution: string | null;
+      distribution_delta: number;
+      distribution_delta_online?: boolean;
+    } | null,
+  ): Promise<T> {
+    const mode = dto.mode ?? current?.mode;
+    const topicId = dto.topic_id ?? current?.topic_id;
+    const supportsDelta = mode === 'BY_TYPE' || mode === 'BY_CHAPTER';
+
+    if (!supportsDelta) {
+      if ((dto.distribution_delta ?? 0) > 0) {
+        throw new BadRequestException(
+          'distribution_delta is only supported for BY_TYPE and BY_CHAPTER exams',
+        );
+      }
+      if (
+        dto.distribution_delta !== undefined ||
+        current?.distribution_delta ||
+        current?.distribution_delta_online
+      ) {
+        dto = {
+          ...dto,
+          distribution_delta: 0,
+          distribution_delta_online: false,
+        };
+      }
+      return dto;
+    }
+
+    if (mode === 'BY_CHAPTER') {
+      const distribution = JSON.stringify(
+        parseChapterDistribution(dto.distribution ?? current?.distribution),
+      );
+      dto = { ...dto, distribution };
+      await this.examsRepository.validateChapterDistribution(
+        topicId as string,
+        distribution,
+      );
+    } else if (
+      !current ||
+      dto.mode !== undefined ||
+      dto.distribution !== undefined
+    ) {
+      parseTypeDistribution(dto.distribution ?? current?.distribution);
+    }
+
+    const effectiveDelta =
+      dto.distribution_delta ?? current?.distribution_delta ?? 0;
+    if (effectiveDelta === 0 && dto.distribution_delta_online !== false) {
+      const wasOnline =
+        dto.distribution_delta_online ?? current?.distribution_delta_online;
+      if (wasOnline) {
+        dto = { ...dto, distribution_delta_online: false };
+      }
+    }
+    return dto;
+  }
+
+  /**
+   * Configuration-time estimate of whether the requested delta can be applied
+   * to the given distribution. Never blocks saving; only reports warnings.
+   */
+  async checkDistributionDelta(
+    dto: CheckDistributionDeltaDto,
+  ): Promise<DeltaFeasibility> {
+    const delta = dto.distribution_delta ?? 0;
+    if (dto.mode === 'BY_CHAPTER') {
+      const rows = parseChapterDistribution(dto.distribution);
+      await this.examsRepository.validateChapterDistribution(
+        dto.topic_id,
+        JSON.stringify(rows),
+      );
+      const candidates = await this.examRuntime.loadChapterCapacity(
+        dto.topic_id,
+        rows,
+      );
+      return checkChapterDeltaFeasibility({ rows, delta, candidates });
+    }
+    if (dto.mode !== 'BY_TYPE') {
+      throw new BadRequestException(
+        'Delta feasibility check supports BY_TYPE and BY_CHAPTER exams only',
+      );
+    }
+    const rows = parseTypeDistribution(dto.distribution);
+    const capacity = await this.examRuntime.countTypeCapacity(
+      dto.topic_id,
+      rows,
+    );
+    return checkTypeDeltaFeasibility({ rows, delta, capacity });
   }
 
   async findAll(query: QueryExamDto) {
@@ -48,16 +150,7 @@ export class ExamsService {
 
   async update(id: string, dto: UpdateExamDto) {
     const current = await this.findOne(id);
-    if ((dto.mode ?? current.mode) === 'BY_CHAPTER') {
-      const distribution = JSON.stringify(
-        parseChapterDistribution(dto.distribution ?? current.distribution),
-      );
-      dto = { ...dto, distribution };
-      await this.examsRepository.validateChapterDistribution(
-        dto.topic_id ?? current.topic_id,
-        distribution,
-      );
-    }
+    dto = await this.prepareDistribution(dto, current);
     const exam = await this.examsRepository.update(id, dto);
     await this.examRuntimeQueue.scheduleExam(exam);
     return exam;
