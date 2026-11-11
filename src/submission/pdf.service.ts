@@ -1,4 +1,5 @@
 import { selectChapterQuestionIds } from '../common/chapter-question-selection';
+import { parseTypeDistribution } from '../common/question-distribution';
 import {
   BadRequestException,
   Injectable,
@@ -393,13 +394,15 @@ export class PdfService {
       `;
     } else if (exam.mode === 'BY_TYPE') {
       if (exam.distribution) {
-        const parsedDistribution = JSON.parse(exam.distribution);
-        for (const dist of parsedDistribution) {
+        for (const dist of parseTypeDistribution(exam.distribution)) {
           const questionsData = await this.prisma.$queryRaw<any[]>`
-            SELECT * FROM "questions"
-            WHERE question_type::text = ${dist.question_type}
-              AND question_format::text = ${dist.question_format}
-              AND is_deleted = false
+            SELECT q.* FROM "questions" AS q
+            INNER JOIN "chapters" AS c ON c.id = q.chapter_id
+            WHERE c.topic_id = ${exam.topic_id}
+              AND c.is_deleted = false
+              AND q.question_type::text = ${dist.question_type}
+              AND q.question_format::text = ${dist.question_format}
+              AND q.is_deleted = false
             ORDER BY RANDOM()
             LIMIT ${dist.quantity}
           `;

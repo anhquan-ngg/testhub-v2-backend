@@ -23,6 +23,7 @@ import { CreateExamDto } from './dto/create-exam.dto';
 import { UpdateExamDto } from './dto/update-exam.dto';
 import { QueryExamDto } from './dto/query-exam.dto';
 import { AddExamQuestionDto } from './dto/add-exam-question.dto';
+import { CheckDistributionDeltaDto } from './dto/check-distribution-delta.dto';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 
 @ApiTags('Exams')
@@ -39,6 +40,17 @@ export class ExamsController {
     return this.examsService.create(req.user.id, dto);
   }
 
+  @Post('distribution-delta/check')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Estimate whether a distribution delta is feasible (warning only, does not block saving)',
+  })
+  @ApiResponse({ status: 200, description: 'Feasibility estimate.' })
+  checkDistributionDelta(@Body() dto: CheckDistributionDeltaDto) {
+    return this.examsService.checkDistributionDelta(dto);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get exams with pagination and filters' })
   findAll(@Query() query: QueryExamDto) {
@@ -46,7 +58,9 @@ export class ExamsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get an exam by ID (includes questions, topic, lecturer)' })
+  @ApiOperation({
+    summary: 'Get an exam by ID (includes questions, topic, lecturer)',
+  })
   @ApiResponse({ status: 404, description: 'Exam not found.' })
   findOne(@Param('id') id: string) {
     return this.examsService.findOne(id);

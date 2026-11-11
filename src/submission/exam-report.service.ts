@@ -1,5 +1,6 @@
 ﻿import { Injectable, NotFoundException, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
+import { sumDistributionQuantity } from '../common/question-distribution';
 import * as puppeteer from 'puppeteer';
 import { escapeHtml } from '@/exam-print/exam-print.templates';
 import { getInterFontFaceCss } from './report-fonts';
@@ -45,14 +46,20 @@ export class ExamReportService implements OnModuleDestroy {
       orderBy: { created_at: 'desc' },
     });
 
-    const getDistributionQuestions = (distributions: any) => {
+    const getDistributionQuestions = (distributions: string | null) => {
       if (!distributions) return 0;
-      const parsedDistribution = JSON.parse(distributions);
-      let res = 0;
-      for (let i = 0; i < parsedDistribution.length; i++) {
-        res += parsedDistribution[i].quantity;
+      try {
+        const parsed: unknown = JSON.parse(distributions);
+        return Array.isArray(parsed)
+          ? sumDistributionQuantity(
+              parsed.filter((row): row is { quantity: number } =>
+                Number.isInteger((row as { quantity?: unknown })?.quantity),
+              ),
+            )
+          : 0;
+      } catch {
+        return 0;
       }
-      return res;
     };
 
     const calculateTotalQuestions = (ex: typeof exam): number => {

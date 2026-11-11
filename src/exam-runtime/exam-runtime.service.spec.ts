@@ -432,6 +432,125 @@ describe('ExamRuntimeService', () => {
       expect(selectQuestionsSpy).not.toHaveBeenCalled();
       expect(mockCreateMany).not.toHaveBeenCalled();
     });
+
+    /* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- private service internals are exercised through `any` like the rest of this spec */
+    describe('online distribution delta', () => {
+      const typeExam = (overrides: Record<string, unknown> = {}) => ({
+        id: 'exam-1',
+        topic_id: 'topic-1',
+        mode: ExamMode.BY_TYPE,
+        sample_size: null,
+        distribution: JSON.stringify([
+          {
+            question_type: 'SINGLE_CHOICE',
+            question_format: 'KNOWLEDGE',
+            quantity: 3,
+          },
+          {
+            question_type: 'SINGLE_CHOICE',
+            question_format: 'UNDERSTANDING',
+            quantity: 3,
+          },
+        ]),
+        distribution_delta: 1,
+        distribution_delta_online: true,
+        ...overrides,
+      });
+      const makeDb = (count = 0) => ({
+        submissionQuestions: {
+          count: jest.fn().mockResolvedValue(count),
+          createMany: jest.fn().mockResolvedValue({ count: 6 }),
+        },
+        submission: { update: jest.fn().mockResolvedValue({}) },
+      });
+      const rows = Array.from({ length: 6 }, (_, i) => ({ id: `q${i}` }));
+
+      it('plans a per-attempt quota and persists the slim metadata', async () => {
+        const db = makeDb();
+        jest
+          .spyOn(service as any, 'countTypeCapacity')
+          .mockResolvedValue([20, 20]);
+        const select = jest
+          .spyOn(service as any, 'selectQuestions')
+          .mockResolvedValue(rows);
+
+        await (service as any).ensureSubmissionQuestions(
+          'sub-1',
+          typeExam(),
+          db,
+        );
+
+        const override = select.mock.calls[0][2] as { quantity: number }[];
+        expect(override.reduce((sum, row) => sum + row.quantity, 0)).toBe(6);
+        const update = db.submission.update.mock.calls[0][0];
+        expect(update.where).toEqual({ id: 'sub-1' });
+        expect(update.data.selection_metadata).toMatchObject({
+          v: 1,
+          requested_delta: 1,
+          status: 'applied',
+        });
+        expect(db.submissionQuestions.createMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('falls back to the baseline when the planned quota cannot be filled', async () => {
+        const db = makeDb();
+        jest
+          .spyOn(service as any, 'countTypeCapacity')
+          .mockResolvedValue([20, 20]);
+        const select = jest
+          .spyOn(service as any, 'selectQuestions')
+          .mockRejectedValueOnce(new Error('not enough'))
+          .mockResolvedValueOnce(rows);
+
+        await (service as any).ensureSubmissionQuestions(
+          'sub-1',
+          typeExam(),
+          db,
+        );
+
+        expect(select).toHaveBeenCalledTimes(2);
+        expect(select.mock.calls[1][2]).toBeUndefined();
+        expect(
+          db.submission.update.mock.calls[0][0].data.selection_metadata,
+        ).toMatchObject({
+          status: 'unchanged',
+          reason: 'SELECTION_INSUFFICIENT',
+        });
+      });
+
+      it('does not plan or write metadata when online delta is off', async () => {
+        const db = makeDb();
+        const capacity = jest.spyOn(service as any, 'countTypeCapacity');
+        const select = jest
+          .spyOn(service as any, 'selectQuestions')
+          .mockResolvedValue(rows);
+
+        await (service as any).ensureSubmissionQuestions(
+          'sub-1',
+          typeExam({ distribution_delta_online: false }),
+          db,
+        );
+
+        expect(capacity).not.toHaveBeenCalled();
+        expect(select.mock.calls[0][2]).toBeUndefined();
+        expect(db.submission.update).not.toHaveBeenCalled();
+      });
+
+      it('leaves slots and metadata untouched on resume', async () => {
+        const db = makeDb(6);
+        const select = jest.spyOn(service as any, 'selectQuestions');
+
+        await (service as any).ensureSubmissionQuestions(
+          'sub-1',
+          typeExam(),
+          db,
+        );
+
+        expect(select).not.toHaveBeenCalled();
+        expect(db.submission.update).not.toHaveBeenCalled();
+      });
+    });
+    /* eslint-enable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment */
   });
 
   describe('formatSubmissionExam', () => {

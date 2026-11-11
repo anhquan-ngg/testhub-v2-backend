@@ -14,6 +14,21 @@ import {
   ExamRuntimeService,
   type ExamQuestionRow,
 } from '@/exam-runtime/exam-runtime.service';
+import {
+  parseChapterDistribution,
+  type ChapterDistribution,
+} from '@/common/chapter-question-selection';
+import {
+  planChapterVariant,
+  planTypeVariant,
+  selectionFallbackSummary,
+  type DistributionDeltaSummary,
+} from '@/common/distribution-delta';
+import { generateSeed } from '@/common/quota-planner';
+import {
+  parseTypeDistribution,
+  type TypeDistributionItem,
+} from '@/common/question-distribution';
 import { isAllowedPrintRequest } from './exam-print.network';
 import {
   PRINT_READY_FLAG,
@@ -31,6 +46,11 @@ import { buildVariant, generateVariantCodes } from './exam-print.variants';
 type PrintUser = { id: string; role: UserRole };
 
 type PdfDocument = { html: string; footerLabel: string };
+
+type DrawnVariant = {
+  questions: ExamQuestionRow[];
+  summary: DistributionDeltaSummary | null;
+};
 
 const PAGE_LOAD_TIMEOUT_MS = 45_000;
 const MATH_READY_TIMEOUT_MS = 15_000;
@@ -133,6 +153,7 @@ export class ExamPrintService {
         mode: true,
         sample_size: true,
         distribution: true,
+        distribution_delta: true,
         lecturer_id: true,
         topic: { select: { name: true } },
         lecturer: { select: { full_name: true, school: true } },
@@ -153,13 +174,13 @@ export class ExamPrintService {
         exam.mode === ExamMode.MANUAL
           ? await this.examRuntime.selectQuestions(exam)
           : null;
-      const questionSets: ExamQuestionRow[][] = manualSet
-        ? Array.from({ length: variantCount }, () => manualSet)
-        : await Promise.all(
-            Array.from({ length: variantCount }, () =>
-              this.examRuntime.selectQuestions(exam),
-            ),
-          );
+      const drawn: DrawnVariant[] = manualSet
+        ? Array.from({ length: variantCount }, () => ({
+            questions: manualSet,
+            summary: null,
+          }))
+        : await this.drawVariants(exam, variantCount);
+      const questionSets = drawn.map((item) => item.questions);
 
       const sources = await this.hydrateQuestions(questionSets.flat());
       const codes = generateVariantCodes(variantCount);
@@ -191,6 +212,23 @@ export class ExamPrintService {
         zip.file(`Ma_de_${variant.code}.pdf`, pdfs[i]);
       });
       zip.file('Dap_an.pdf', pdfs[variants.length]);
+      if (drawn.some((item) => item.summary !== null)) {
+        zip.file(
+          'distribution-summary.json',
+          JSON.stringify(
+            {
+              exam_id: exam.id,
+              mode: exam.mode,
+              variants: variants.map((variant, i) => ({
+                code: variant.code,
+                ...drawn[i].summary,
+              })),
+            },
+            null,
+            2,
+          ),
+        );
+      }
       const buffer = await zip.generateAsync({
         type: 'nodebuffer',
         compression: 'DEFLATE',
@@ -207,6 +245,90 @@ export class ExamPrintService {
     });
   }
 
+  /**
+   * Draws one question set per variant. BY_TYPE / BY_CHAPTER exams with a
+   * positive distribution delta get an independently planned quota per
+   * variant; a variant whose planned quota cannot be filled falls back to the
+   * configured baseline (which still throws the usual 400 when the bank is short).
+   */
+  private async drawVariants(
+    exam: {
+      id: string;
+      topic_id: string;
+      mode: ExamMode;
+      sample_size: number | null;
+      distribution: string | null;
+      distribution_delta: number;
+    },
+    variantCount: number,
+  ): Promise<DrawnVariant[]> {
+    const planVariant = await this.createVariantPlanner(exam);
+    return Promise.all(
+      Array.from({ length: variantCount }, async () => {
+        const planned = planVariant?.();
+        if (!planned)
+          return {
+            questions: await this.examRuntime.selectQuestions(exam),
+            summary: null,
+          };
+        try {
+          return {
+            questions: await this.examRuntime.selectQuestions(
+              exam,
+              undefined,
+              planned.rows,
+            ),
+            summary: planned.summary,
+          };
+        } catch (error) {
+          if (planned.summary.status !== 'applied') throw error;
+          return {
+            questions: await this.examRuntime.selectQuestions(exam),
+            summary: selectionFallbackSummary(planned.summary),
+          };
+        }
+      }),
+    );
+  }
+
+  /**
+   * Builds a per-variant quota planner for delta-enabled BY_TYPE/BY_CHAPTER
+   * exams (reading capacity once), or null when delta does not apply.
+   */
+  private async createVariantPlanner(exam: {
+    topic_id: string;
+    mode: ExamMode;
+    distribution: string | null;
+    distribution_delta: number;
+  }): Promise<
+    | (() => {
+        rows: TypeDistributionItem[] | ChapterDistribution;
+        summary: DistributionDeltaSummary;
+      })
+    | null
+  > {
+    if (exam.distribution_delta <= 0 || !exam.distribution) return null;
+    const delta = exam.distribution_delta;
+    if (exam.mode === ExamMode.BY_TYPE) {
+      const rows = parseTypeDistribution(exam.distribution);
+      const capacity = await this.examRuntime.countTypeCapacity(
+        exam.topic_id,
+        rows,
+      );
+      return () =>
+        planTypeVariant({ rows, delta, seed: generateSeed(), capacity });
+    }
+    if (exam.mode === ExamMode.BY_CHAPTER) {
+      const rows = parseChapterDistribution(exam.distribution);
+      const candidates = await this.examRuntime.loadChapterCapacity(
+        exam.topic_id,
+        rows,
+      );
+      return () =>
+        planChapterVariant({ rows, delta, seed: generateSeed(), candidates });
+    }
+    return null;
+  }
   /**
    * Loads authoritative question data (including the correct answer, which
    * the runtime selection deliberately omits) and resolves image files to

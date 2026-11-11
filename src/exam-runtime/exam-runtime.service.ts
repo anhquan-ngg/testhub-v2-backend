@@ -1,4 +1,20 @@
-import { selectChapterQuestionIds } from '../common/chapter-question-selection';
+import {
+  loadChapterCandidates,
+  parseChapterDistribution,
+  selectChapterQuestionIds,
+  type ChapterDistribution,
+} from '../common/chapter-question-selection';
+import {
+  parseTypeDistribution,
+  type TypeDistributionItem,
+} from '../common/question-distribution';
+import {
+  planChapterVariant,
+  planTypeVariant,
+  selectionFallbackSummary,
+  type DistributionDeltaSummary,
+} from '../common/distribution-delta';
+import { generateSeed } from '../common/quota-planner';
 import {
   BadRequestException,
   ForbiddenException,
@@ -85,12 +101,6 @@ export type MonitorRosterResponse = {
     total_violations: number;
   };
   rows: MonitorRosterRow[];
-};
-
-type ExamDistributionItem = {
-  question_type: string;
-  question_format: string;
-  quantity: number;
 };
 
 export type QuestionFileRow = {
@@ -1368,10 +1378,11 @@ export class ExamRuntimeService implements OnModuleInit {
       distribution: string | null;
     },
     db?: Prisma.TransactionClient,
+    quotaOverride?: TypeDistributionItem[] | ChapterDistribution,
   ): Promise<ExamQuestionRow[]> {
     if (!db) {
       return this.prisma.inTransaction((tx) =>
-        this.selectQuestions(examData, tx),
+        this.selectQuestions(examData, tx, quotaOverride),
       );
     }
     let questions: ExamQuestionRow[] = [];
@@ -1430,16 +1441,11 @@ export class ExamRuntimeService implements OnModuleInit {
         'RANDOM_N',
       );
     } else if (examData.mode === ExamMode.BY_TYPE) {
-      let parsedDistribution: ExamDistributionItem[];
-      try {
-        parsedDistribution = examData.distribution
-          ? (JSON.parse(examData.distribution) as ExamDistributionItem[])
-          : [];
-      } catch {
-        throw new BadRequestException(
-          'Exam distribution data is malformed (BY_TYPE)',
-        );
-      }
+      const parsedDistribution =
+        (quotaOverride as TypeDistributionItem[] | undefined) ??
+        (examData.distribution
+          ? parseTypeDistribution(examData.distribution)
+          : []);
       const byTypeResults = await Promise.all(
         parsedDistribution.map(
           (distribution) =>
@@ -1475,6 +1481,7 @@ export class ExamRuntimeService implements OnModuleInit {
         db,
         examData.topic_id,
         examData.distribution,
+        quotaOverride as ChapterDistribution | undefined,
       );
       questions = await this.hydrateSelectedQuestions(
         ids.map((id) => ({ id })),
@@ -1487,6 +1494,54 @@ export class ExamRuntimeService implements OnModuleInit {
     }
 
     return questions;
+  }
+
+  /**
+   * Available (non-deleted) questions per BY_TYPE group, in the order of
+   * `rows`. Read outside the selection transaction: it only sizes the delta
+   * planner, and `selectQuestions` still asserts the real availability.
+   */
+  async countTypeCapacity(
+    topicId: string,
+    rows: readonly TypeDistributionItem[],
+  ): Promise<number[]> {
+    if (rows.length === 0) return [];
+    const counts = await this.prisma.$queryRaw<
+      Array<{ question_type: string; question_format: string; total: number }>
+    >`
+      SELECT q.question_type::text AS question_type,
+             q.question_format::text AS question_format,
+             COUNT(*)::int AS total
+      FROM "questions" AS q
+      INNER JOIN "chapters" AS c ON c.id = q.chapter_id
+      WHERE c.topic_id = ${topicId}
+        AND c.is_deleted = false
+        AND q.is_deleted = false
+      GROUP BY 1, 2
+    `;
+    const byKey = new Map(
+      counts.map((item) => [
+        `${item.question_type}/${item.question_format}`,
+        Number(item.total),
+      ]),
+    );
+    return rows.map(
+      (row) => byKey.get(`${row.question_type}/${row.question_format}`) ?? 0,
+    );
+  }
+
+  /**
+   * Candidate question ids per BY_CHAPTER row (active subtrees included),
+   * aligned with `rows`. Read outside the selection transaction: it only
+   * feeds the delta planner; `selectQuestions` re-reads under its own snapshot.
+   */
+  async loadChapterCapacity(
+    topicId: string,
+    rows: ChapterDistribution,
+  ): Promise<string[][]> {
+    return this.prisma.inTransaction((tx) =>
+      loadChapterCandidates(tx, topicId, rows),
+    );
   }
 
   private async hydrateSelectedQuestions(
@@ -1547,6 +1602,8 @@ export class ExamRuntimeService implements OnModuleInit {
       mode: ExamMode;
       sample_size: number | null;
       distribution: string | null;
+      distribution_delta?: number;
+      distribution_delta_online?: boolean;
     },
     db?: Prisma.TransactionClient,
   ): Promise<void> {
@@ -1563,8 +1620,18 @@ export class ExamRuntimeService implements OnModuleInit {
       return;
     }
 
-    const questions = await this.selectQuestions(examData, db);
+    const { questions, summary } = await this.selectAttemptQuestions(
+      examData,
+      db,
+    );
     const orderedQuestions = this.shuffleArray(questions);
+
+    if (summary) {
+      await db.submission.update({
+        where: { id: submissionId },
+        data: { selection_metadata: summary as unknown as Prisma.JsonObject },
+      });
+    }
 
     await db.submissionQuestions.createMany({
       data: orderedQuestions.map((question, index) => ({
@@ -1574,6 +1641,86 @@ export class ExamRuntimeService implements OnModuleInit {
       })),
       skipDuplicates: true,
     });
+  }
+
+  /**
+   * Selects one attempt's questions. When the exam opted into online delta,
+   * a per-attempt quota is planned (capacity is read before selection takes
+   * its `FOR SHARE` locks) and the baseline is used if that quota cannot be
+   * filled. The summary is returned only when a delta policy was in effect.
+   */
+  private async selectAttemptQuestions(
+    examData: {
+      id: string;
+      topic_id: string;
+      mode: ExamMode;
+      sample_size: number | null;
+      distribution: string | null;
+      distribution_delta?: number;
+      distribution_delta_online?: boolean;
+    },
+    db: Prisma.TransactionClient,
+  ): Promise<{
+    questions: ExamQuestionRow[];
+    summary: DistributionDeltaSummary | null;
+  }> {
+    const delta = examData.distribution_delta ?? 0;
+    const supported =
+      examData.mode === ExamMode.BY_TYPE ||
+      examData.mode === ExamMode.BY_CHAPTER;
+    if (
+      !examData.distribution_delta_online ||
+      delta <= 0 ||
+      !supported ||
+      !examData.distribution
+    ) {
+      return {
+        questions: await this.selectQuestions(examData, db),
+        summary: null,
+      };
+    }
+
+    const seed = generateSeed();
+    const planned =
+      examData.mode === ExamMode.BY_TYPE
+        ? await this.planOnlineTypeQuota(examData, delta, seed)
+        : await this.planOnlineChapterQuota(examData, delta, seed);
+
+    try {
+      return {
+        questions: await this.selectQuestions(examData, db, planned.rows),
+        summary: planned.summary,
+      };
+    } catch (error) {
+      if (planned.summary.status !== 'applied') throw error;
+      this.logger.warn(
+        `Online delta quota not fillable for exam ${examData.id} (seed ${seed}); using baseline`,
+      );
+      return {
+        questions: await this.selectQuestions(examData, db),
+        summary: selectionFallbackSummary(planned.summary),
+      };
+    }
+  }
+
+  private async planOnlineTypeQuota(
+    examData: { topic_id: string; distribution: string | null },
+    delta: number,
+    seed: number,
+  ) {
+    const rows = parseTypeDistribution(examData.distribution);
+    const capacity = await this.countTypeCapacity(examData.topic_id, rows);
+    return planTypeVariant({ rows, delta, seed, capacity });
+  }
+
+  private async planOnlineChapterQuota(
+    examData: { topic_id: string; distribution: string | null },
+    delta: number,
+    seed: number,
+  ) {
+    const rows = parseChapterDistribution(examData.distribution);
+    const candidates = await this.loadChapterCapacity(examData.topic_id, rows);
+    return planChapterVariant({ rows, delta, seed, candidates });
   }
 
   private shuffleArray<T>(items: T[]): T[] {
