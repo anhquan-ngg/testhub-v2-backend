@@ -14,6 +14,7 @@ const typeRows = JSON.stringify([
   },
 ]);
 
+/** Builds the service with isolated repository and capacity-planning mocks. */
 function build(
   current?: Record<string, unknown>,
   capacity: number[] = [10, 10],
@@ -35,7 +36,7 @@ function build(
     queue as unknown as ExamRuntimeQueueService,
     runtime as unknown as ExamRuntimeService,
   );
-  return { service, repo };
+  return { service, repo, runtime };
 }
 
 const base = { mode: 'BY_TYPE', topic_id: 't', distribution: typeRows };
@@ -89,6 +90,28 @@ describe('ExamsService distribution_delta', () => {
     expect(updateArg(repo)).not.toHaveProperty('distribution_delta_online');
   });
 
+  it('still validates BY_CHAPTER capacity when saving an exam', async () => {
+    const { service, repo } = build();
+    repo.validateChapterDistribution.mockRejectedValue(
+      new BadRequestException('not enough'),
+    );
+    await expect(
+      service.create('u', {
+        mode: 'BY_CHAPTER',
+        topic_id: 't',
+        distribution: JSON.stringify([
+          {
+            chapter_id: '00000000-0000-4000-8000-000000000001',
+            quantity: 3,
+          },
+        ]),
+        distribution_delta: 1,
+      } as unknown as CreateExamDto),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.validateChapterDistribution).toHaveBeenCalledTimes(1);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('accepts a delta for BY_TYPE and rejects a malformed distribution', async () => {
     const { service, repo } = build();
     await service.create('u', {
@@ -106,6 +129,7 @@ describe('ExamsService distribution_delta', () => {
   });
 });
 
+/** Returns the DTO passed to the mocked update boundary. */
 function updateArg(repo: { update: jest.Mock }): Record<string, unknown> {
   return (repo.update.mock.calls as unknown[][])[0][1] as Record<
     string,
@@ -146,16 +170,63 @@ describe('ExamsService.checkDistributionDelta', () => {
     }));
     const pool = (p: string) =>
       Array.from({ length: 10 }, (_, i) => `${p}${i}`);
-    const { service, repo } = build(undefined, [], [pool('a'), pool('b')]);
+    const { service, repo, runtime } = build(
+      undefined,
+      [],
+      [pool('a'), pool('b')],
+    );
     const result = await service.checkDistributionDelta({
       topic_id: 't',
       mode: 'BY_CHAPTER',
       distribution: JSON.stringify(chapterRows),
       distribution_delta: 1,
     } as never);
-    expect(repo.validateChapterDistribution).toHaveBeenCalled();
+    expect(repo.validateChapterDistribution).not.toHaveBeenCalled();
+    expect(runtime.loadChapterCapacity).toHaveBeenCalledTimes(1);
+    expect(runtime.loadChapterCapacity).toHaveBeenCalledWith('t', chapterRows);
     expect(result.baseline_feasible).toBe(true);
     expect(result.max_feasible_d).toBe(1);
+  });
+
+  it('warns instead of rejecting an insufficient BY_CHAPTER baseline', async () => {
+    const chapterRows = [
+      {
+        chapter_id: '00000000-0000-4000-8000-000000000001',
+        quantity: 3,
+      },
+    ];
+    const { service, repo, runtime } = build(undefined, [], [['q1', 'q2']]);
+    repo.validateChapterDistribution.mockRejectedValue(
+      new BadRequestException('not enough'),
+    );
+    const result = await service.checkDistributionDelta({
+      topic_id: 't',
+      mode: 'BY_CHAPTER',
+      distribution: JSON.stringify(chapterRows),
+      distribution_delta: 1,
+    } as never);
+
+    expect(result.baseline_feasible).toBe(false);
+    expect(result.max_feasible_d).toBe(0);
+    expect(result.warnings.map((warning) => warning.code)).toContain(
+      'BASELINE_INSUFFICIENT',
+    );
+    expect(repo.validateChapterDistribution).not.toHaveBeenCalled();
+    expect(runtime.loadChapterCapacity).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects malformed BY_CHAPTER rows before reading capacity', async () => {
+    const { service, repo, runtime } = build();
+    await expect(
+      service.checkDistributionDelta({
+        topic_id: 't',
+        mode: 'BY_CHAPTER',
+        distribution: JSON.stringify([{ chapter_id: 'invalid', quantity: 3 }]),
+        distribution_delta: 1,
+      } as never),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.validateChapterDistribution).not.toHaveBeenCalled();
+    expect(runtime.loadChapterCapacity).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported modes', async () => {

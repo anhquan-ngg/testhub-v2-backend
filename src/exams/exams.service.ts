@@ -113,10 +113,6 @@ export class ExamsService {
     const delta = dto.distribution_delta ?? 0;
     if (dto.mode === 'BY_CHAPTER') {
       const rows = parseChapterDistribution(dto.distribution);
-      await this.examsRepository.validateChapterDistribution(
-        dto.topic_id,
-        JSON.stringify(rows),
-      );
       const candidates = await this.examRuntime.loadChapterCapacity(
         dto.topic_id,
         rows,

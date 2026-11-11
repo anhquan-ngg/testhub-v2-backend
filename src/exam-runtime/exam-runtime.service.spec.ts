@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ExamRuntimeService } from './exam-runtime.service';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -27,6 +28,7 @@ describe('ExamRuntimeService', () => {
     );
 
     Object.defineProperty(mockPrismaService, 'current', {
+      configurable: true,
       get: () => mockPrismaService,
     });
     Object.defineProperty(mockPrismaService, 'inTransaction', {
@@ -61,6 +63,63 @@ describe('ExamRuntimeService', () => {
   });
 
   afterEach(() => jest.restoreAllMocks());
+
+  describe('countTypeCapacity', () => {
+    const rows = [
+      {
+        question_type: QuestionType.SINGLE_CHOICE,
+        question_format: QuestionFormat.KNOWLEDGE,
+        quantity: 3,
+      },
+      {
+        question_type: QuestionType.SINGLE_CHOICE,
+        question_format: QuestionFormat.UNDERSTANDING,
+        quantity: 3,
+      },
+    ];
+
+    it('queries the supplied transaction without using the root client', async () => {
+      const rootQuery = jest.spyOn(prismaService, '$queryRaw');
+      const query = jest.fn<Promise<unknown>, [TemplateStringsArray, string]>();
+      query.mockResolvedValue([
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'KNOWLEDGE',
+          total: 7,
+        },
+      ]);
+      const db = { $queryRaw: query } as unknown as Prisma.TransactionClient;
+      expect(await service.countTypeCapacity('topic-1', rows, db)).toEqual([
+        7, 0,
+      ]);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query.mock.calls[0][1]).toBe('topic-1');
+      expect(rootQuery).not.toHaveBeenCalled();
+    });
+
+    it('defaults to the current client for print and configuration callers', async () => {
+      const rootQuery = jest.spyOn(prismaService, '$queryRaw');
+      const query = jest.fn<Promise<unknown>, [TemplateStringsArray, string]>();
+      query.mockResolvedValue([
+        {
+          question_type: 'SINGLE_CHOICE',
+          question_format: 'UNDERSTANDING',
+          total: 9,
+        },
+      ]);
+      const db = { $queryRaw: query } as unknown as Prisma.TransactionClient;
+      jest.spyOn(prismaService, 'current', 'get').mockReturnValue(db);
+      expect(await service.countTypeCapacity('topic-1', rows)).toEqual([0, 9]);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(rootQuery).not.toHaveBeenCalled();
+    });
+
+    it('does not query for an empty distribution', async () => {
+      const query = jest.spyOn(prismaService, '$queryRaw');
+      expect(await service.countTypeCapacity('topic-1', [])).toEqual([]);
+      expect(query).not.toHaveBeenCalled();
+    });
+  });
 
   describe('selectQuestions (ExamMode.RANDOM_N)', () => {
     it('should query matching question IDs, pick random ones, and query full question details', async () => {
@@ -467,8 +526,8 @@ describe('ExamRuntimeService', () => {
 
       it('plans a per-attempt quota and persists the slim metadata', async () => {
         const db = makeDb();
-        jest
-          .spyOn(service as any, 'countTypeCapacity')
+        const capacity = jest
+          .spyOn(service, 'countTypeCapacity')
           .mockResolvedValue([20, 20]);
         const select = jest
           .spyOn(service as any, 'selectQuestions')
@@ -480,6 +539,11 @@ describe('ExamRuntimeService', () => {
           db,
         );
 
+        expect(capacity).toHaveBeenCalledWith(
+          'topic-1',
+          JSON.parse(typeExam().distribution),
+          db,
+        );
         const override = select.mock.calls[0][2] as { quantity: number }[];
         expect(override.reduce((sum, row) => sum + row.quantity, 0)).toBe(6);
         const update = db.submission.update.mock.calls[0][0];
@@ -499,7 +563,7 @@ describe('ExamRuntimeService', () => {
           .mockResolvedValue([20, 20]);
         const select = jest
           .spyOn(service as any, 'selectQuestions')
-          .mockRejectedValueOnce(new Error('not enough'))
+          .mockRejectedValueOnce(new BadRequestException('not enough'))
           .mockResolvedValueOnce(rows);
 
         await (service as any).ensureSubmissionQuestions(
@@ -516,6 +580,40 @@ describe('ExamRuntimeService', () => {
           status: 'unchanged',
           reason: 'SELECTION_INSUFFICIENT',
         });
+      });
+
+      it('propagates unexpected errors without querying the baseline', async () => {
+        const db = makeDb();
+        jest.spyOn(service, 'countTypeCapacity').mockResolvedValue([20, 20]);
+        const failure = new Error('transaction aborted');
+        const select = jest
+          .spyOn(service as any, 'selectQuestions')
+          .mockRejectedValueOnce(failure);
+
+        await expect(
+          (service as any).ensureSubmissionQuestions('sub-1', typeExam(), db),
+        ).rejects.toBe(failure);
+
+        expect(select).toHaveBeenCalledTimes(1);
+        expect(db.submission.update).not.toHaveBeenCalled();
+        expect(db.submissionQuestions.createMany).not.toHaveBeenCalled();
+      });
+
+      it('does not retry a failed unchanged quota', async () => {
+        const db = makeDb();
+        jest.spyOn(service, 'countTypeCapacity').mockResolvedValue([3, 3]);
+        const failure = new BadRequestException('not enough');
+        const select = jest
+          .spyOn(service as any, 'selectQuestions')
+          .mockRejectedValueOnce(failure);
+
+        await expect(
+          (service as any).ensureSubmissionQuestions('sub-1', typeExam(), db),
+        ).rejects.toBe(failure);
+
+        expect(select).toHaveBeenCalledTimes(1);
+        expect(db.submission.update).not.toHaveBeenCalled();
+        expect(db.submissionQuestions.createMany).not.toHaveBeenCalled();
       });
 
       it('does not plan or write metadata when online delta is off', async () => {

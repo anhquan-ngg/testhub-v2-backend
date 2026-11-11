@@ -1,5 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  MAX_DISTRIBUTION_QUESTIONS,
+  MAX_QUESTION_DISTRIBUTION_ROWS,
+  MAX_QUESTIONS_PER_DISTRIBUTION_ROW,
+} from './question-distribution.constants';
+import {
   normalizeTypeDistribution,
   parseTypeDistribution,
   sumDistributionQuantity,
@@ -47,6 +52,15 @@ describe('question-distribution', () => {
     expect(sumDistributionQuantity(rows)).toBe(5);
   });
 
+  it('accepts saved rows with extra keys and strips those keys', () => {
+    const legacyRow = { ...row('ESSAY', 'KNOWLEDGE', 1), extra: true };
+    for (const value of [[legacyRow], JSON.stringify([legacyRow])]) {
+      expect(parseTypeDistribution(value)).toEqual([
+        row('ESSAY', 'KNOWLEDGE', 1),
+      ]);
+    }
+  });
+
   it.each([
     ['not json', '{oops'],
     ['not an array', '{}'],
@@ -56,8 +70,27 @@ describe('question-distribution', () => {
     ['zero quantity', JSON.stringify([row('ESSAY', 'KNOWLEDGE', 0)])],
     ['fractional quantity', JSON.stringify([row('ESSAY', 'KNOWLEDGE', 1.5)])],
     [
-      'extra property',
-      JSON.stringify([{ ...row('ESSAY', 'KNOWLEDGE', 1), extra: true }]),
+      'row quantity limit',
+      [row('ESSAY', 'KNOWLEDGE', MAX_QUESTIONS_PER_DISTRIBUTION_ROW + 1)],
+    ],
+    [
+      'row count limit',
+      Array.from({ length: MAX_QUESTION_DISTRIBUTION_ROWS + 1 }, () =>
+        row('ESSAY', 'KNOWLEDGE', 1),
+      ),
+    ],
+    [
+      'total quantity limit',
+      [
+        row('ESSAY', 'KNOWLEDGE', MAX_DISTRIBUTION_QUESTIONS),
+        row('ESSAY', 'UNDERSTANDING', 1),
+      ],
+    ],
+    ['missing type', [{ question_format: 'KNOWLEDGE', quantity: 1 }]],
+    ['missing format', [{ question_type: 'ESSAY', quantity: 1 }]],
+    [
+      'missing quantity',
+      [{ question_type: 'ESSAY', question_format: 'KNOWLEDGE' }],
     ],
   ])('rejects malformed input: %s', (_name, value) => {
     expect(() => parseTypeDistribution(value)).toThrow(BadRequestException);
