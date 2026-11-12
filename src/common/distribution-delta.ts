@@ -142,6 +142,7 @@ export type DeltaWarningCode =
 export type DeltaFeasibility = {
   baseline_feasible: boolean;
   delta_requested: number;
+  /** Largest applied_d observed in eight seeds per budget; a lower bound. */
   max_feasible_d: number;
   total_questions: number;
   warnings: Array<{ code: DeltaWarningCode; message: string }>;
@@ -154,11 +155,12 @@ type FeasibilityInput = {
   total: number;
   delta: number;
   baselineFeasible: boolean;
-  /** True when a seeded plan with the given budget produced a real variation. */
-  canVary: (d: number, seed: number) => boolean;
+  /** Actual transfer distance achieved by a seeded plan with this budget. */
+  appliedDelta: (d: number, seed: number) => number;
   noVariationMessage: string;
 };
 
+/** Estimates a feasible lower bound from eight seeded plans per budget. */
 function estimateDeltaFeasibility(input: FeasibilityInput): DeltaFeasibility {
   const { total, delta } = input;
   const result: DeltaFeasibility = {
@@ -180,10 +182,10 @@ function estimateDeltaFeasibility(input: FeasibilityInput): DeltaFeasibility {
 
   for (let d = 1; d <= delta; d++) {
     for (let seed = 1; seed <= FEASIBILITY_SIMULATIONS; seed++) {
-      if (input.canVary(d, seed)) {
-        result.max_feasible_d = d;
-        break;
-      }
+      result.max_feasible_d = Math.max(
+        result.max_feasible_d,
+        input.appliedDelta(d, seed),
+      );
     }
   }
 
@@ -195,7 +197,7 @@ function estimateDeltaFeasibility(input: FeasibilityInput): DeltaFeasibility {
   } else if (result.max_feasible_d < delta) {
     result.warnings.push({
       code: 'DELTA_ABOVE_MAX_FEASIBLE',
-      message: `Only a delta of up to ${result.max_feasible_d} is achievable with the current question bank.`,
+      message: `Seeded plans achieved a delta of up to ${result.max_feasible_d} with the current question bank; this is an estimated lower bound.`,
     });
   }
   if (delta >= 2 && total < DELTA_MIN_TOTAL_FOR_TWO) {
@@ -208,8 +210,8 @@ function estimateDeltaFeasibility(input: FeasibilityInput): DeltaFeasibility {
 }
 
 /**
- * Configuration-time estimate: simulates the planner with fixed seeds against
- * the available capacity. Only warns; saving is never blocked by the result.
+ * Configuration-time lower-bound estimate: simulates eight seeds per budget
+ * against available capacity. Only warns; never blocks saving.
  */
 export function checkTypeDeltaFeasibility(input: {
   rows: readonly TypeDistributionItem[];
@@ -221,9 +223,8 @@ export function checkTypeDeltaFeasibility(input: {
     total: rows.reduce((sum, row) => sum + row.quantity, 0),
     delta,
     baselineFeasible: rows.every((row, i) => capacity[i] >= row.quantity),
-    canVary: (d, seed) =>
-      planTypeVariant({ rows, delta: d, seed, capacity }).summary.status ===
-      'applied',
+    appliedDelta: (d, seed) =>
+      planTypeVariant({ rows, delta: d, seed, capacity }).summary.applied_d,
     noVariationMessage:
       'No adjacent cognitive levels can exchange questions; every variant will use the configured distribution.',
   });
@@ -312,9 +313,9 @@ export function checkChapterDeltaFeasibility(input: {
     total: rows.reduce((sum, row) => sum + row.quantity, 0),
     delta,
     baselineFeasible: matchChapterQuestions(rows, candidates) !== null,
-    canVary: (d, seed) =>
+    appliedDelta: (d, seed) =>
       planChapterVariant({ rows, delta: d, seed, candidates }).summary
-        .status === 'applied',
+        .applied_d,
     noVariationMessage:
       'No chapter can give up a question without breaking another quota; every variant will use the configured distribution.',
   });

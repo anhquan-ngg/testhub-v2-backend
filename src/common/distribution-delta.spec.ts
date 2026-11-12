@@ -93,11 +93,18 @@ describe('checkTypeDeltaFeasibility', () => {
   });
 
   it('reports no warnings when spare capacity exists and N is large', () => {
-    const big = rows.map((row) => ({ ...row, quantity: 20 }));
+    const big: TypeDistributionItem[] = [
+      ...rows.map((row) => ({ ...row, quantity: 20 })),
+      {
+        question_type: 'SINGLE_CHOICE',
+        question_format: 'ADVANCED',
+        quantity: 20,
+      },
+    ];
     const result = checkTypeDeltaFeasibility({
       rows: big,
       delta: 2,
-      capacity: [30, 30, 30],
+      capacity: [30, 30, 30, 30],
     });
     expect(result.max_feasible_d).toBe(2);
     expect(result.warnings).toEqual([]);
@@ -111,6 +118,27 @@ describe('checkTypeDeltaFeasibility', () => {
     });
     expect(result.max_feasible_d).toBe(0);
     expect(result.warnings[0].code).toBe('NO_FEASIBLE_VARIATION');
+  });
+
+  it('reports the achieved distance when delta 2 only produces delta 1', () => {
+    const adjacentRows = rows.slice(0, 2);
+    expect(
+      planTypeVariant({
+        rows: adjacentRows,
+        delta: 2,
+        seed: 1,
+        capacity: [6, 6],
+      }).summary,
+    ).toMatchObject({ status: 'applied', applied_d: 1 });
+    const result = checkTypeDeltaFeasibility({
+      rows: adjacentRows,
+      delta: 2,
+      capacity: [6, 6],
+    });
+    expect(result.max_feasible_d).toBe(1);
+    expect(result.warnings.map((warning) => warning.code)).toContain(
+      'DELTA_ABOVE_MAX_FEASIBLE',
+    );
   });
 
   it('warns about delta 2 on small exams', () => {
@@ -161,6 +189,19 @@ describe('BY_CHAPTER delta planning', () => {
     });
     expect(result.summary.status).toBe('unchanged');
     expect(result.rows.map((row) => row.quantity)).toEqual([5, 5, 5]);
+  });
+
+  it('estimates delta from actual chapter transfers rather than the budget', () => {
+    const rows = chapterRows.slice(0, 2);
+    const candidates = [pool('a', 6), pool('b', 6)];
+    expect(
+      planChapterVariant({ rows, delta: 2, seed: 1, candidates }).summary,
+    ).toMatchObject({ status: 'applied', applied_d: 1 });
+    const result = checkChapterDeltaFeasibility({ rows, delta: 2, candidates });
+    expect(result.max_feasible_d).toBe(1);
+    expect(result.warnings.map((warning) => warning.code)).toContain(
+      'DELTA_ABOVE_MAX_FEASIBLE',
+    );
   });
 
   it('never counts a shared question twice (overlapping subtrees)', () => {

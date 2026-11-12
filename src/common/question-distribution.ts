@@ -17,17 +17,15 @@ export const QUESTION_FORMAT_ORDER: readonly QuestionFormat[] = [
 
 const typeDistributionSchema = z
   .array(
-    z
-      .object({
-        question_type: z.nativeEnum(QuestionType),
-        question_format: z.nativeEnum(QuestionFormat),
-        quantity: z
-          .number()
-          .int()
-          .positive()
-          .max(MAX_QUESTIONS_PER_DISTRIBUTION_ROW),
-      })
-      .strict(),
+    z.object({
+      question_type: z.nativeEnum(QuestionType),
+      question_format: z.nativeEnum(QuestionFormat),
+      quantity: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_QUESTIONS_PER_DISTRIBUTION_ROW),
+    }),
   )
   .min(1)
   .max(MAX_QUESTION_DISTRIBUTION_ROWS);

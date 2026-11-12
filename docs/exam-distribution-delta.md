@@ -33,10 +33,21 @@ Both are additive and backwards compatible.
 - `POST /exams/distribution-delta/check` body `{ topic_id, mode, distribution (JSON string), distribution_delta? }`
   returns `{ baseline_feasible, delta_requested, max_feasible_d, total_questions, warnings: [{ code, message }] }`.
   Codes: `BASELINE_INSUFFICIENT`, `NO_FEASIBLE_VARIATION`, `DELTA_ABOVE_MAX_FEASIBLE`, `DELTA_HIGH_FOR_TOTAL` (d=2 with N < 40).
-  The UI only warns at configuration time; saving is never blocked.
+  `max_feasible_d` is the largest actual `applied_d` observed across eight fixed
+  seeds per budget from 1 to the requested delta. It is an estimated lower bound,
+  not a proven maximum: a plan marked `applied` may transfer fewer questions than
+  its budget, and unobserved seeds may achieve more.
+  Insufficient BY_CHAPTER baselines are reported as `BASELINE_INSUFFICIENT` warnings
+  by this check, without duplicate capacity validation. Save-time validation is unchanged.
 
 ## Notes
 
 - `generateBlankExamPdf(examId)` has no per-copy seed and uses the baseline distribution.
-- Capacity is read outside the selection transaction; if it changed, selection falls back to the baseline.
+- Saved BY_TYPE rows may contain extra keys; parsing strips them while preserving
+  required field, per-row, row-count and total-count validation. No migration is needed.
+- Online BY_TYPE capacity queries use the attempt's transaction (other callers
+  default to the ambient client). Selection still verifies and locks questions.
+- Online selection falls back to the baseline only for an applied plan rejected
+  with `BadRequestException` (insufficient questions). Other errors propagate;
+  no further query is attempted in a potentially failed transaction.
 - Tests: `npx jest src/common src/exams src/exam-print src/exam-runtime src/submission`.

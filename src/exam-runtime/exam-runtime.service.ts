@@ -1498,15 +1498,16 @@ export class ExamRuntimeService implements OnModuleInit {
 
   /**
    * Available (non-deleted) questions per BY_TYPE group, in the order of
-   * `rows`. Read outside the selection transaction: it only sizes the delta
-   * planner, and `selectQuestions` still asserts the real availability.
+   * `rows`. Uses the supplied transaction or ambient client; selection still
+   * asserts availability and locks the questions before persistence.
    */
   async countTypeCapacity(
     topicId: string,
     rows: readonly TypeDistributionItem[],
+    db: Prisma.TransactionClient = this.prisma.current,
   ): Promise<number[]> {
     if (rows.length === 0) return [];
-    const counts = await this.prisma.$queryRaw<
+    const counts = await db.$queryRaw<
       Array<{ question_type: string; question_format: string; total: number }>
     >`
       SELECT q.question_type::text AS question_type,
@@ -1645,9 +1646,9 @@ export class ExamRuntimeService implements OnModuleInit {
 
   /**
    * Selects one attempt's questions. When the exam opted into online delta,
-   * a per-attempt quota is planned (capacity is read before selection takes
-   * its `FOR SHARE` locks) and the baseline is used if that quota cannot be
-   * filled. The summary is returned only when a delta policy was in effect.
+   * a per-attempt quota is planned before selection takes `FOR SHARE` locks.
+   * Only an applied quota's validation failure retries the baseline; database
+   * and other unexpected errors propagate. Returns a summary only for delta.
    */
   private async selectAttemptQuestions(
     examData: {
@@ -1683,7 +1684,7 @@ export class ExamRuntimeService implements OnModuleInit {
     const seed = generateSeed();
     const planned =
       examData.mode === ExamMode.BY_TYPE
-        ? await this.planOnlineTypeQuota(examData, delta, seed)
+        ? await this.planOnlineTypeQuota(examData, delta, seed, db)
         : await this.planOnlineChapterQuota(examData, delta, seed);
 
     try {
@@ -1692,7 +1693,11 @@ export class ExamRuntimeService implements OnModuleInit {
         summary: planned.summary,
       };
     } catch (error) {
-      if (planned.summary.status !== 'applied') throw error;
+      if (
+        planned.summary.status !== 'applied' ||
+        !(error instanceof BadRequestException)
+      )
+        throw error;
       this.logger.warn(
         `Online delta quota not fillable for exam ${examData.id} (seed ${seed}); using baseline`,
       );
@@ -1703,13 +1708,15 @@ export class ExamRuntimeService implements OnModuleInit {
     }
   }
 
+  /** Plans an online BY_TYPE quota using the attempt's transaction capacity. */
   private async planOnlineTypeQuota(
     examData: { topic_id: string; distribution: string | null },
     delta: number,
     seed: number,
+    db: Prisma.TransactionClient,
   ) {
     const rows = parseTypeDistribution(examData.distribution);
-    const capacity = await this.countTypeCapacity(examData.topic_id, rows);
+    const capacity = await this.countTypeCapacity(examData.topic_id, rows, db);
     return planTypeVariant({ rows, delta, seed, capacity });
   }
 
