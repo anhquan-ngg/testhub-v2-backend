@@ -1,10 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsIn, IsOptional, IsUUID } from 'class-validator';
+import {
+  ArrayNotEmpty,
+  IsArray,
+  IsIn,
+  IsOptional,
+  IsUUID,
+} from 'class-validator';
 
 export class CommitQuestionImportDto {
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
   @IsArray()
+  @ArrayNotEmpty()
   @IsUUID('4', { each: true })
   item_ids?: string[];
 

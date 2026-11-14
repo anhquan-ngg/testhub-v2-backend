@@ -5,6 +5,26 @@ export const DOCUMENT_RESULT_MAX_BYTES = 8 * 1024 * 1024;
 export const DOCUMENT_QUEUE = 'ai-document-processing';
 export const DOCUMENT_JOB = 'extract';
 export const DOCUMENT_LEASE_MS = 120_000;
+/** Parser rule generation; extractions from older rules are never reused. */
+export const DOCUMENT_PARSER_RULES = 'text/v2';
+
+/** True when a stored parser version was produced by the current rule set. */
+export function isCurrentParser(parserVersion: string): boolean {
+  return parserVersion.endsWith(`;${DOCUMENT_PARSER_RULES}`);
+}
+
+/**
+ * A source may feed RAG/plans/generation when fully extracted, or when a
+ * PARTIAL extraction was explicitly confirmed by the owner.
+ */
+export function isUsableSource(
+  status: string,
+  partialConfirmedAt: Date | null | undefined,
+): boolean {
+  return (
+    status === 'EXTRACTED' || (status === 'PARTIAL' && !!partialConfirmedAt)
+  );
+}
 
 function positiveEnv(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -89,6 +109,17 @@ export const createDocumentSchema = z
   })
   .strict();
 
+/** Per-unit extraction health; unit numbers are original PDF pages or slides. */
+export const extractionQualitySchema = z
+  .object({
+    total_units: z.number().int().min(1).max(500),
+    text_units: z.number().int().min(0).max(500),
+    ocr_suspected_units: z.array(z.number().int().min(1).max(500)).max(500),
+    blank_units: z.array(z.number().int().min(1).max(500)).max(500),
+  })
+  .strict();
+export type ExtractionQuality = z.infer<typeof extractionQualitySchema>;
+
 export const extractionSchema = z
   .object({
     contract_version: z.literal('document-extraction.v1'),
@@ -100,7 +131,7 @@ export const extractionSchema = z
       .max(128)
       .regex(/^[a-zA-Z0-9./;:_-]+$/),
     include_notes: z.boolean(),
-    status: z.enum(['EXTRACTED', 'OCR_REQUIRED']),
+    status: z.enum(['EXTRACTED', 'PARTIAL', 'OCR_REQUIRED']),
     unit_count: z.number().int().min(1).max(500),
     spans: z
       .array(
@@ -114,7 +145,17 @@ export const extractionSchema = z
       )
       .min(1)
       .max(1000),
-    warnings: z.array(z.enum(['EMPTY_UNITS', 'OCR_REQUIRED'])).max(2),
+    warnings: z
+      .array(
+        z.enum([
+          'EMPTY_UNITS',
+          'OCR_REQUIRED',
+          'PARTIAL_EXTRACTION',
+          'NO_USABLE_TEXT',
+        ]),
+      )
+      .max(4),
+    quality: extractionQualitySchema.optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
@@ -139,7 +180,14 @@ export const extractionSchema = z
             )),
       ) ||
       v.spans.reduce((n, s) => n + Array.from(s.text).length, 0) > 1_000_000 ||
-      (v.status === 'EXTRACTED' && !v.spans.some((s) => s.text.trim()))
+      (v.status !== 'OCR_REQUIRED' && !v.spans.some((s) => s.text.trim())) ||
+      (v.status === 'PARTIAL' && !v.quality?.ocr_suspected_units.length) ||
+      (v.quality &&
+        (v.quality.total_units !== v.unit_count ||
+          v.quality.text_units > v.unit_count ||
+          [...v.quality.ocr_suspected_units, ...v.quality.blank_units].some(
+            (n) => n > v.unit_count,
+          )))
     )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -1,0 +1,47 @@
+{
+  "normalization": "Trim outer whitespace; uppercase enum/key labels; preserve internal whitespace and paragraph boundaries. Bold/italic become plain text. Embedded image bytes are preserved by the parser.",
+  "questions": [
+    {
+      "sourceCode": "TEST-001",
+      "chapterName": "Kiểm thử > Đại số",
+      "questionText": "Dòng một: chọn $x^2 + 1$.\nDòng hai: Tiếng Việt — α ≤ β; giữ dấu & khoảng cách.",
+      "questionType": "SINGLE_CHOICE",
+      "questionFormat": "KNOWLEDGE",
+      "options": [
+        { "key": "A", "text": "Sai: x = 0", "isCorrect": false },
+        {
+          "key": "C",
+          "text": "Đúng: x = 2\nGiải thích trong lựa chọn",
+          "isCorrect": true
+        }
+      ],
+      "imageCount": 1
+    },
+    {
+      "sourceCode": "TEST-002",
+      "chapterName": "Kiểm thử > Số học",
+      "questionText": "Chọn các số nguyên tố: 2, 4, 5, 9, 11, 12.",
+      "questionType": "MULTIPLE_CHOICE",
+      "questionFormat": "UNDERSTANDING",
+      "options": [
+        { "key": "A", "text": "2", "isCorrect": true },
+        { "key": "B", "text": "4", "isCorrect": false },
+        { "key": "C", "text": "5", "isCorrect": true },
+        { "key": "D", "text": "9", "isCorrect": false },
+        { "key": "E", "text": "11", "isCorrect": true },
+        { "key": "F", "text": "12", "isCorrect": false }
+      ],
+      "imageCount": 0
+    },
+    {
+      "sourceCode": "TEST-003",
+      "chapterName": "Kiểm thử > Phương trình",
+      "questionText": "Giải phương trình $2x + 4 = 10$.\nTrình bày từng bước bằng tiếng Việt.",
+      "questionType": "ESSAY",
+      "questionFormat": "ADVANCED",
+      "options": [],
+      "correctAnswer": "2x = 6\nx = 3; kết luận chính xác.",
+      "imageCount": 0
+    }
+  ]
+}

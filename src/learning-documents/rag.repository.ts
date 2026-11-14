@@ -31,7 +31,14 @@ export class RagRepository {
       });
       if (!locked.count) return null;
       const source = await tx.learningDocumentVersion.findFirst({
-        where: { id: version, document_id: document, status: 'EXTRACTED' },
+        where: {
+          id: version,
+          document_id: document,
+          OR: [
+            { status: 'EXTRACTED' },
+            { status: 'PARTIAL', partial_confirmed_at: { not: null } },
+          ],
+        },
       });
       if (!source) return null;
       return tx.learningDocumentIndex.upsert({
@@ -57,7 +64,10 @@ export class RagRepository {
     return this.prisma.learningDocumentVersion.findMany({
       where: {
         id: { in: ids },
-        status: 'EXTRACTED',
+        OR: [
+          { status: 'EXTRACTED' },
+          { status: 'PARTIAL', partial_confirmed_at: { not: null } },
+        ],
         document: this.documents.scope(owner),
       },
       include: {

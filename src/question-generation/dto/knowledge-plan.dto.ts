@@ -94,6 +94,15 @@ export class EditKnowledgePlanDto extends PlanRevisionDto {
   @Type(() => PlanMatrixDto)
   matrix: PlanMatrixDto;
 }
+export class RebuildMatrixDto extends PlanRevisionDto {
+  @ApiProperty({ type: [PlanNodeDto], maxItems: 1000 })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => PlanNodeDto)
+  nodes: PlanNodeDto[];
+}
 export class CreateKnowledgePlanDto {
   @ApiProperty({ format: 'uuid' }) @IsUUID() topic_id: string;
   @ApiProperty({ format: 'uuid' }) @IsUUID() version_id: string;

@@ -4,7 +4,7 @@ import { S3Service } from '../s3/s3.service';
 import { RagRepository } from './rag.repository';
 import { RagClient } from './rag-client.service';
 import { DocumentProcessingError } from './document-client.service';
-import { extractionSchema } from './document.contract';
+import { extractionSchema, isUsableSource } from './document.contract';
 import { RagCommand, RagProgress } from './rag.contract';
 
 type IndexRow = NonNullable<Awaited<ReturnType<RagRepository['claim']>>>;
@@ -58,7 +58,7 @@ export class RagExecution {
         );
         if (
           !extraction.success ||
-          extraction.data.status !== 'EXTRACTED' ||
+          !isUsableSource(extraction.data.status, v.partial_confirmed_at) ||
           extraction.data.source_sha256 !== v.source_sha256 ||
           extraction.data.parser_version !== v.parser_version ||
           extraction.data.include_notes !== v.include_notes ||
