@@ -17,6 +17,7 @@ import {
   DOCUMENT_RESULT_MAX_BYTES,
   documentQuota,
   extractionSchema,
+  isCurrentParser,
   ListDocumentsQuery,
   renameDocumentSchema,
   UploadDocument,
@@ -201,7 +202,8 @@ export class DocumentService {
       if (
         !donor?.artifact_key ||
         !donor.artifact_sha256 ||
-        !donor.parser_version
+        !donor.parser_version ||
+        !isCurrentParser(donor.parser_version)
       )
         return null;
       const bytes = await this.storage.getBoundedObject(
@@ -239,8 +241,8 @@ export class DocumentService {
           parser_version: donor.parser_version,
           unit_count: donor.unit_count,
           warnings: donor.warnings as Prisma.InputJsonValue | null,
-          status:
-            donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
+          quality: donor.quality as Prisma.InputJsonValue | null,
+          status: donor.status as 'EXTRACTED' | 'PARTIAL' | 'OCR_REQUIRED',
         },
       );
       if (!changed.count) {
@@ -250,7 +252,7 @@ export class DocumentService {
       return {
         document_id: documentId,
         version_id: version.id,
-        status: donor.status === 'OCR_REQUIRED' ? 'OCR_REQUIRED' : 'EXTRACTED',
+        status: donor.status as 'EXTRACTED' | 'PARTIAL' | 'OCR_REQUIRED',
         reused_extraction: true,
       };
     } catch {
@@ -322,7 +324,7 @@ export class DocumentService {
     const version = await this.version(ownerId, id, versionId);
     if (
       !version.artifact_key ||
-      !['EXTRACTED', 'OCR_REQUIRED'].includes(version.status)
+      !['EXTRACTED', 'PARTIAL', 'OCR_REQUIRED'].includes(version.status)
     )
       throw new ConflictException('Extraction is not available');
     const bytes = await this.storage.getBoundedObject(
@@ -342,11 +344,31 @@ export class DocumentService {
       status: version.status,
       unit_count: result.unit_count,
       warnings: result.warnings,
+      quality: result.quality ?? null,
+      partial_confirmed_at: version.partial_confirmed_at,
       data: result.spans.slice((page - 1) * limit, page * limit),
       total: result.spans.length,
       page,
       limit,
     };
+  }
+
+  /**
+   * Accept a PARTIAL extraction for RAG/planning/generation. Original page
+   * numbers are kept; the gap stays visible in `quality`.
+   */
+  async confirmPartial(ownerId: string, id: string, versionId: string) {
+    const version = await this.version(ownerId, id, versionId);
+    if (version.status !== 'PARTIAL')
+      throw new ConflictException('DOCUMENT_NOT_PARTIAL');
+    if (!version.partial_confirmed_at)
+      await this.repository.confirmPartial(ownerId, id, versionId);
+    return this.version(ownerId, id, versionId).then((v) => ({
+      document_id: id,
+      version_id: v.id,
+      status: v.status,
+      partial_confirmed_at: v.partial_confirmed_at,
+    }));
   }
 
   /** Revoke future access/processing; stored bytes stay until the document is purged. */

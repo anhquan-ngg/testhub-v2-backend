@@ -6,7 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { DocumentRepository } from '../learning-documents/document.repository';
 import { RagClient } from '../learning-documents/rag-client.service';
@@ -16,15 +16,19 @@ import { KnowledgePlanRepository } from './knowledge-plan.repository';
 import {
   ContentMap,
   PlanMatrix,
+  PlanOutlineInvalidError,
+  buildMatrix,
+  disambiguateSiblings,
   freezeMatrix,
+  matrixTotal,
   outlineSchema,
   planMatrixSchema,
+  planNodeSchema,
 } from './knowledge-plan.contract';
 import {
-  expandQuestionConfigs,
   questionConfigsSchema,
+  totalQuestionCount,
 } from './question-generation.contract';
-import type { QuestionConfig } from './question-generation.contract';
 
 const createSchema = z
   .object({
@@ -36,6 +40,12 @@ const createSchema = z
   .strict();
 const editSchema = z
   .object({ revision: z.number().int().positive(), matrix: planMatrixSchema })
+  .strict();
+const rebuildSchema = z
+  .object({
+    revision: z.number().int().positive(),
+    nodes: z.array(planNodeSchema).min(1).max(1000),
+  })
   .strict();
 const revisionSchema = z
   .object({ revision: z.number().int().positive() })
@@ -74,10 +84,11 @@ export class KnowledgePlanService {
 
   /** Read the proposal and current conservative matches in the bank. */
   async get(owner: string, id: string) {
-    const plan = await this.repository.get(owner, id);
+    const { question_configs, ...plan } = await this.repository.get(owner, id);
     const matrix = planMatrixSchema.safeParse(plan.matrix);
     return {
       ...plan,
+      target_total: this.targetTotal(question_configs),
       chapter_matches: matrix.success
         ? await this.repository.matches(owner, plan.topic_id, matrix.data)
         : [],
@@ -96,6 +107,12 @@ export class KnowledgePlanService {
     )
       throw new BadRequestException('Invalid pagination');
     return this.repository.list(owner, page, limit);
+  }
+
+  /** Batch size the lecturer asked for; every approved matrix must add up to it. */
+  private targetTotal(configs: unknown): number | null {
+    const parsed = questionConfigsSchema.safeParse(configs);
+    return parsed.success ? totalQuestionCount(parsed.data) : null;
   }
 
   private validateUnits(matrix: PlanMatrix, map: ContentMap) {
@@ -134,6 +151,42 @@ export class KnowledgePlanService {
     return this.get(owner, id);
   }
 
+  /**
+   * Regenerate the topic x cognitive-level rows for an edited chapter list so
+   * the matrix again adds up to the batch size. Editing or deleting chapters
+   * never requires deleting rows by hand; this clears any approval.
+   */
+  async rebuildMatrix(owner: string, id: string, input: unknown) {
+    const parsed = rebuildSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException('Invalid chapter list');
+    const plan = await this.repository.owned(owner, id);
+    if (!['REVIEW_REQUIRED', 'APPROVED'].includes(plan.status))
+      throw new ConflictException('Plan is not editable');
+    this.validateUnits(
+      { nodes: parsed.data.nodes, rows: [] },
+      outlineSchema.parse(plan.content_map),
+    );
+    let matrix: PlanMatrix;
+    try {
+      matrix = buildMatrix(
+        parsed.data.nodes,
+        questionConfigsSchema.parse(plan.question_configs),
+      );
+    } catch (error) {
+      if (error instanceof PlanOutlineInvalidError)
+        throw new BadRequestException('Invalid or cyclic chapter tree');
+      throw error;
+    }
+    await this.repository.edit(owner, id, parsed.data.revision, matrix);
+    return this.get(owner, id);
+  }
+
+  private assertBatchTotal(matrix: PlanMatrix, configs: unknown) {
+    const target = this.targetTotal(configs);
+    if (target !== null && matrixTotal(matrix.rows) !== target)
+      throw new ConflictException('PLAN_MATRIX_TOTAL_MISMATCH');
+  }
+
   /** Approval freezes the matrix only; no chapters/questions are created here. */
   async approve(owner: string, id: string, input: unknown) {
     const parsed = revisionSchema.safeParse(input);
@@ -143,6 +196,7 @@ export class KnowledgePlanService {
       throw new ConflictException('Plan is not awaiting approval');
     const matrix = planMatrixSchema.parse(plan.matrix);
     this.validateUnits(matrix, outlineSchema.parse(plan.content_map));
+    this.assertBatchTotal(matrix, plan.question_configs);
     await this.repository.edit(owner, id, parsed.data.revision, matrix, true);
     return this.get(owner, id);
   }
@@ -154,11 +208,9 @@ export class KnowledgePlanService {
     const plan = await this.repository.owned(owner, id);
     if (plan.status !== 'APPROVED' || plan.revision !== parsed.data.revision)
       throw new ConflictException('Plan changed or is not approved');
-    const snapshot = freezeMatrix(
-      id,
-      plan.revision,
-      planMatrixSchema.parse(plan.matrix),
-    );
+    const matrix = planMatrixSchema.parse(plan.matrix);
+    this.assertBatchTotal(matrix, plan.question_configs);
+    const snapshot = freezeMatrix(id, plan.revision, matrix);
     return {
       snapshot,
       command: {
@@ -230,20 +282,25 @@ export class KnowledgePlanService {
           });
           continue;
         }
-        const map = await this.client.outline({
+        const raw = await this.client.outline({
           owner_id: plan.created_by,
           index_id: state.index.id,
           profile_id: state.index.profile_id,
           title: source.document.title,
         });
         if (
-          map.version_id !== source.id ||
-          map.document_id !== source.document_id ||
-          map.source_sha256 !== source.source_sha256
+          raw.version_id !== source.id ||
+          raw.document_id !== source.document_id ||
+          raw.source_sha256 !== source.source_sha256
         )
           throw new BadRequestException('Source identity changed');
+        // Older AI outlines may repeat sibling names; never fail a plan on that.
+        const map: ContentMap = {
+          ...raw,
+          nodes: disambiguateSiblings(raw.nodes, (node) => node.evidence),
+        };
         const configs = questionConfigsSchema.parse(plan.question_configs);
-        const matrix = this.suggest(map, configs);
+        const matrix = buildMatrix(map.nodes, configs);
         await this.repository.finish(plan.id, token, plan.created_by, {
           status: 'REVIEW_REQUIRED',
           content_map: map,
@@ -257,55 +314,35 @@ export class KnowledgePlanService {
           (error instanceof DocumentProcessingError && error.retryable) ||
           (error instanceof HttpException &&
             [503, 504].includes(error.getStatus()));
+        const invalid =
+          error instanceof PlanOutlineInvalidError ||
+          error instanceof z.ZodError;
         await this.repository.finish(
           candidate.id,
           token,
           candidate.created_by,
           {
             status: retry ? 'WAITING_SOURCE' : 'FAILED',
-            error_code: retry ? null : 'PLAN_SOURCE_UNAVAILABLE',
+            error_code: retry
+              ? null
+              : invalid
+                ? 'PLAN_OUTLINE_INVALID'
+                : 'PLAN_SOURCE_UNAVAILABLE',
           },
         );
       }
     }
   }
 
-  private suggest(map: ContentMap, configs: QuestionConfig[]): PlanMatrix {
-    const parents = new Set(map.nodes.map((node) => node.parent_id));
-    const leaves = map.nodes.filter((node) => !parents.has(node.id));
-    const slots = expandQuestionConfigs(configs);
-    const selected = Array.from(
-      { length: Math.min(leaves.length, slots.length) },
-      (_, index) =>
-        leaves[
-          Math.floor(
-            (index * leaves.length) / Math.min(leaves.length, slots.length),
-          )
-        ],
-    );
-    const grouped = new Map<string, PlanMatrix['rows'][number]>();
-    for (const [index, slot] of slots.entries()) {
-      const node = selected[index % selected.length];
-      const key = `${node.id}/${slot.question_type}`;
-      const row = grouped.get(key) ?? {
-        id: randomUUID(),
-        node_id: node.id,
-        question_type: slot.question_type,
-        objective: `Kiểm tra kiến thức về ${node.name}`.slice(0, 400),
-        source_units: node.source_units,
-        counts: { KNOWLEDGE: 0, UNDERSTANDING: 0, APPLYING: 0, ADVANCED: 0 },
-      };
-      row.counts[slot.question_format]++;
-      grouped.set(key, row);
-    }
-    return planMatrixSchema.parse({
-      nodes: map.nodes.map(({ id, parent_id, name, source_units }) => ({
-        id,
-        parent_id,
-        name,
-        source_units,
-      })),
-      rows: [...grouped.values()],
-    });
+  /** Explicitly re-queue a FAILED plan; reading a plan never does this. */
+  async retry(owner: string, id: string) {
+    const plan = await this.repository.owned(owner, id);
+    if (plan.status !== 'FAILED' || !plan.error_code?.startsWith('PLAN_'))
+      throw new ConflictException('PLAN_NOT_RETRYABLE');
+    if (plan.error_code === 'PLAN_SCOPE_REVOKED')
+      throw new ConflictException('PLAN_NOT_RETRYABLE');
+    if (!(await this.repository.retry(owner, id)).count)
+      throw new ConflictException('PLAN_NOT_RETRYABLE');
+    return this.get(owner, id);
   }
 }

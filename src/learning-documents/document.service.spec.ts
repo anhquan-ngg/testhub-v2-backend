@@ -204,7 +204,7 @@ describe('Document upload and source boundaries', () => {
     const artifact = Buffer.from(
       JSON.stringify({
         contract_version: 'document-extraction.v1',
-        parser_version: 'pdf/fixture;text/v1',
+        parser_version: 'pdf/fixture;text/v2',
         source_type: 'PDF',
         source_sha256: hash,
         include_notes: false,
@@ -219,7 +219,7 @@ describe('Document upload and source boundaries', () => {
       status: 'EXTRACTED',
       artifact_key: 'donor-artifact',
       artifact_sha256: artifactHash,
-      parser_version: 'pdf/fixture;text/v1',
+      parser_version: 'pdf/fixture;text/v2',
       unit_count: 1,
       warnings: [],
     };
@@ -289,6 +289,15 @@ describe('Document upload and source boundaries', () => {
       );
       expect(repo.complete).not.toHaveBeenCalled();
     });
+    it('does not reuse an artifact produced by an older parser rule set', async () => {
+      repo.reusable.mockResolvedValue({
+        ...donor,
+        parser_version: 'pdf/fixture;text/v1',
+      });
+      const result = await reuse.complete('owner', 'doc', 'version');
+      expect(result).toMatchObject({ status: 'QUEUED' });
+      expect(repo.completeReused).not.toHaveBeenCalled();
+    });
     it('falls back to the queue without a donor, with a tampered artifact, or after a lost race', async () => {
       repo.reusable.mockResolvedValueOnce(null);
       expect(await reuse.complete('owner', 'doc', 'version')).toMatchObject({
@@ -313,6 +322,35 @@ describe('Document upload and source boundaries', () => {
         status: 'QUEUED',
       });
       expect(repo.completeReused).not.toHaveBeenCalled();
+    });
+    it('confirms a PARTIAL version once and rejects other statuses', async () => {
+      const confirmed = new Date();
+      const versionMock = repo.version;
+      versionMock.mockResolvedValueOnce({ id: 'version', status: 'EXTRACTED' });
+      await expect(
+        reuse.confirmPartial('owner', 'doc', 'version'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      const confirmPartial = jest.fn().mockResolvedValue({ count: 1 });
+      (repo as unknown as { confirmPartial: jest.Mock }).confirmPartial =
+        confirmPartial;
+      versionMock
+        .mockResolvedValueOnce({
+          id: 'version',
+          status: 'PARTIAL',
+          partial_confirmed_at: null,
+        })
+        .mockResolvedValueOnce({
+          id: 'version',
+          status: 'PARTIAL',
+          partial_confirmed_at: confirmed,
+        });
+      expect(await reuse.confirmPartial('owner', 'doc', 'version')).toEqual({
+        document_id: 'doc',
+        version_id: 'version',
+        status: 'PARTIAL',
+        partial_confirmed_at: confirmed,
+      });
+      expect(confirmPartial).toHaveBeenCalledTimes(1);
     });
     it('validates the hash and returns only owner-scoped match metadata', async () => {
       await expect(
@@ -366,10 +404,45 @@ describe('Document upload and source boundaries', () => {
         uploadDocumentSchema.safeParse({ ...input, ...patch }).success,
       ).toBe(false);
   });
+  it('requires PARTIAL extractions to describe the pages that lack text', () => {
+    const partial = {
+      contract_version: 'document-extraction.v1',
+      parser_version: 'pdf/fixture;text/v2',
+      source_type: 'PDF',
+      source_sha256: hash,
+      include_notes: false,
+      status: 'PARTIAL',
+      unit_count: 2,
+      spans: [
+        { kind: 'PAGE', position: 1, text: '' },
+        { kind: 'PAGE', position: 2, text: 'valid' },
+      ],
+      warnings: ['EMPTY_UNITS', 'PARTIAL_EXTRACTION'],
+      quality: {
+        total_units: 2,
+        text_units: 1,
+        ocr_suspected_units: [1],
+        blank_units: [],
+      },
+    };
+    expect(extractionSchema.safeParse(partial).success).toBe(true);
+    expect(
+      extractionSchema.safeParse({
+        ...partial,
+        quality: { ...partial.quality, ocr_suspected_units: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      extractionSchema.safeParse({
+        ...partial,
+        quality: { ...partial.quality, total_units: 5 },
+      }).success,
+    ).toBe(false);
+  });
   it('rejects fabricated page manifests and empty successful extractions', () => {
     const result = {
       contract_version: 'document-extraction.v1',
-      parser_version: 'pdf/fixture;text/v1',
+      parser_version: 'pdf/fixture;text/v2',
       source_type: 'PDF',
       source_sha256: hash,
       include_notes: false,

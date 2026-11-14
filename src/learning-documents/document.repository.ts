@@ -171,6 +171,19 @@ export class DocumentRepository {
     });
   }
 
+  /** Record the lecturer's informed choice to use a PARTIAL extraction as-is. */
+  confirmPartial(ownerId: string, documentId: string, id: string) {
+    return this.prisma.learningDocumentVersion.updateMany({
+      where: {
+        id,
+        document_id: documentId,
+        status: 'PARTIAL',
+        document: { ...this.scope(ownerId), purged_at: null },
+      },
+      data: { partial_confirmed_at: new Date() },
+    });
+  }
+
   /** Persist immutable source identity and a durable queue command in one write. */
   complete(ownerId: string, id: string, sourceKey: string, sha256: string) {
     return this.prisma.learningDocumentVersion.updateMany({
@@ -235,7 +248,7 @@ export class DocumentRepository {
         source_sha256: sha256,
         source_type: sourceType,
         include_notes: includeNotes,
-        status: { in: ['EXTRACTED', 'OCR_REQUIRED'] },
+        status: { in: ['EXTRACTED', 'PARTIAL', 'OCR_REQUIRED'] },
         artifact_key: { not: null },
         artifact_sha256: { not: null },
         parser_version: { not: null },
@@ -249,6 +262,7 @@ export class DocumentRepository {
         parser_version: true,
         unit_count: true,
         warnings: true,
+        quality: true,
       },
     });
   }
@@ -265,10 +279,11 @@ export class DocumentRepository {
       parser_version: string;
       unit_count: number | null;
       warnings: Prisma.InputJsonValue | null;
-      status: 'EXTRACTED' | 'OCR_REQUIRED';
+      quality: Prisma.InputJsonValue | null;
+      status: 'EXTRACTED' | 'PARTIAL' | 'OCR_REQUIRED';
     },
   ) {
-    const { warnings, ...rest } = data;
+    const { warnings, quality, ...rest } = data;
     return this.prisma.learningDocumentVersion.updateMany({
       where: {
         id,
@@ -279,6 +294,8 @@ export class DocumentRepository {
       data: {
         ...rest,
         warnings: warnings ?? Prisma.JsonNull,
+        quality: quality ?? Prisma.JsonNull,
+        partial_confirmed_at: null,
         error_code: null,
       },
     });
@@ -634,6 +651,8 @@ const versionSelect = {
   error_code: true,
   unit_count: true,
   warnings: true,
+  quality: true,
+  partial_confirmed_at: true,
   parser_version: true,
 } satisfies Prisma.LearningDocumentVersionSelect;
 const documentSelect = {

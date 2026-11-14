@@ -112,8 +112,20 @@ export class GenerationExecutionService {
         error instanceof QuestionGenerationException
           ? error.code
           : 'AI_EXECUTION_REJECTED';
+      const evidenceDetails =
+        error instanceof QuestionGenerationException
+          ? error.evidenceDetails
+          : undefined;
       await this.persist(() =>
-        this.repository.fail(batchId, executionId, code),
+        evidenceDetails
+          ? this.repository.fail(
+              batchId,
+              executionId,
+              code,
+              false,
+              evidenceDetails,
+            )
+          : this.repository.fail(batchId, executionId, code),
       );
       return;
     }
