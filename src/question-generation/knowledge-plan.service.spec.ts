@@ -49,6 +49,7 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     question_configs: object[];
     content_map: ContentMap | null;
     matrix: PlanMatrix | null;
+    error_code?: string | null;
   };
   const repository = {
     due: jest.fn(),
@@ -59,6 +60,7 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     matches: jest.fn(),
     edit: jest.fn(),
     create: jest.fn(),
+    retry: jest.fn(),
   };
   const documents = { source: jest.fn() },
     sources = { prepare: jest.fn() },
@@ -206,6 +208,101 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     expect(result.snapshot.nodes[0].name).toBe('Topic 0');
     expect(repository.edit).toHaveBeenCalledTimes(1);
   });
+  const total = (matrix: PlanMatrix | null) =>
+    matrix?.rows.reduce(
+      (sum, row) =>
+        sum +
+        row.counts.KNOWLEDGE +
+        row.counts.UNDERSTANDING +
+        row.counts.APPLYING +
+        row.counts.ADVANCED,
+      0,
+    );
+  it('rebuilds the matrix to the batch size after chapters were deleted or added, and clears approval', async () => {
+    await service.prepareDue();
+    await service.approve(owner, id, { revision: 1 });
+    const nodes = [
+      ...map.nodes.slice(0, 1),
+      {
+        id: randomUUID(),
+        parent_id: null,
+        name: 'New chapter',
+        source_units: [units[1]],
+      },
+    ].map(({ id, parent_id, name, source_units }) => ({
+      id,
+      parent_id,
+      name,
+      source_units,
+    }));
+    const kept = nodes.slice(0, 1);
+    const result = await service.rebuildMatrix(owner, id, {
+      revision: plan.revision,
+      nodes: kept,
+    });
+    expect(result.status).toBe('REVIEW_REQUIRED');
+    expect(result.target_total).toBe(3);
+    expect(plan.matrix?.nodes).toHaveLength(1);
+    expect(total(plan.matrix)).toBe(3);
+    expect(plan.matrix?.rows.every((row) => row.node_id === kept[0].id)).toBe(
+      true,
+    );
+    await service.rebuildMatrix(owner, id, {
+      revision: plan.revision,
+      nodes,
+    });
+    expect(total(plan.matrix)).toBe(3);
+    expect(plan.matrix?.nodes).toHaveLength(2);
+  });
+  it('rejects rebuilds from invalid trees, foreign sources or non-editable plans', async () => {
+    await service.prepareDue();
+    const [a, b] = map.nodes.map(({ id, parent_id, name, source_units }) => ({
+      id,
+      parent_id,
+      name,
+      source_units,
+    }));
+    const revision = plan.revision;
+    await expect(
+      service.rebuildMatrix(owner, id, {
+        revision,
+        nodes: [{ ...a, parent_id: a.id }],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.rebuildMatrix(owner, id, {
+        revision,
+        nodes: [a, { ...b, name: a.name }],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.rebuildMatrix(owner, id, {
+        revision,
+        nodes: [{ ...a, source_units: [{ kind: 'PAGE', position: 99 }] }],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.rebuildMatrix(owner, id, { revision, nodes: [] }),
+    ).rejects.toThrow();
+    plan.status = 'GENERATING';
+    await expect(
+      service.rebuildMatrix(owner, id, { revision, nodes: [a] }),
+    ).rejects.toThrow();
+    expect(repository.edit).not.toHaveBeenCalled();
+  });
+  it('refuses to approve or generate a matrix that no longer adds up to the batch', async () => {
+    await service.prepareDue();
+    if (!plan.matrix) throw new Error('Fixture matrix missing');
+    plan.matrix.rows[0].counts.KNOWLEDGE = 1;
+    await expect(
+      service.approve(owner, id, { revision: plan.revision }),
+    ).rejects.toThrow('PLAN_MATRIX_TOTAL_MISMATCH');
+    expect(repository.edit).not.toHaveBeenCalled();
+    plan.status = 'APPROVED';
+    await expect(
+      service.generation(owner, id, { revision: plan.revision }),
+    ).rejects.toThrow('PLAN_MATRIX_TOTAL_MISMATCH');
+  });
   it('defers retryable source failures and fails an outline for a different immutable version', async () => {
     sources.prepare.mockRejectedValueOnce(
       new ServiceUnavailableException('Temporary dependency outage'),
@@ -216,5 +313,42 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     await service.prepareDue();
     expect(plan.status).toBe('FAILED');
     expect(plan.matrix).toBeNull();
+  });
+  it('disambiguates duplicate sibling names instead of failing the plan', async () => {
+    client.outline.mockResolvedValue({
+      ...map,
+      nodes: map.nodes.map((node) => ({ ...node, name: 'Normalization' })),
+    });
+    await service.prepareDue();
+    expect(plan.status).toBe('REVIEW_REQUIRED');
+    const names = plan.matrix?.nodes.map((node) => node.name.toLowerCase());
+    expect(new Set(names).size).toBe(2);
+    expect(names?.every((name) => name.startsWith('normalization'))).toBe(true);
+  });
+  it('reports an unusable outline as PLAN_OUTLINE_INVALID, not a source failure', async () => {
+    client.outline.mockResolvedValue({
+      ...map,
+      nodes: map.nodes.map((node) => ({ ...node, parent_id: randomUUID() })),
+    });
+    await service.prepareDue();
+    expect(plan.status).toBe('FAILED');
+    expect(plan.error_code).toBe('PLAN_OUTLINE_INVALID');
+  });
+  it('re-queues only a FAILED plan on an explicit retry', async () => {
+    repository.retry.mockResolvedValue({ count: 1 });
+    plan.status = 'FAILED';
+    plan.error_code = 'PLAN_OUTLINE_INVALID';
+    await service.retry(owner, id);
+    expect(repository.retry).toHaveBeenCalledWith(owner, id);
+    plan.status = 'REVIEW_REQUIRED';
+    await expect(service.retry(owner, id)).rejects.toThrow(
+      'PLAN_NOT_RETRYABLE',
+    );
+    plan.status = 'FAILED';
+    plan.error_code = 'PLAN_SCOPE_REVOKED';
+    await expect(service.retry(owner, id)).rejects.toThrow(
+      'PLAN_NOT_RETRYABLE',
+    );
+    expect(repository.retry).toHaveBeenCalledTimes(1);
   });
 });

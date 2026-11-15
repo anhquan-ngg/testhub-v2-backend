@@ -1,3 +1,4 @@
+import type { GenerationEvidenceDetails } from '../question-generation/generation-evidence.contract';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { readAiServiceOptions } from '../question-generation/ai-service.config';
@@ -12,6 +13,7 @@ export class DocumentProcessingError extends Error {
   constructor(
     readonly code: string,
     readonly retryable = false,
+    readonly evidenceDetails?: GenerationEvidenceDetails,
   ) {
     super(code);
   }

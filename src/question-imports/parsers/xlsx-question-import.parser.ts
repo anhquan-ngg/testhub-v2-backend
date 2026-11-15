@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
-import { QUESTION_IMPORT_OPTION_KEYS } from '../question-import.constants';
+import { parseImportOptions } from './import-options';
 import {
   ParsedImportAsset,
   ParsedImportQuestion,
@@ -25,7 +25,12 @@ export class XlsxQuestionImportParser {
 
     const headers = new Map<string, number>();
     worksheet.getRow(1).eachCell((cell, column) => {
-      headers.set(cell.text.trim().toLowerCase(), column);
+      const key = cell.text.trim().toLowerCase();
+      if (!key) return;
+      if (headers.has(key)) {
+        throw new BadRequestException(`Duplicate column: ${key}`);
+      }
+      headers.set(key, column);
     });
     for (const required of [
       'question_text',
@@ -43,19 +48,15 @@ export class XlsxQuestionImportParser {
       const row = worksheet.getRow(rowNumber);
       const text = this.cellText(row, headers, 'question_text');
       const type = this.cellText(row, headers, 'question_type');
-      if (!text && !type) continue;
+      if (
+        ![...headers.keys()].some((key) => this.cellText(row, headers, key))
+      ) {
+        continue;
+      }
 
-      const correctKeys = new Set(
-        this.cellText(row, headers, 'correct_keys')
-          .toUpperCase()
-          .split(/[\s,;]+/)
-          .filter(Boolean),
+      const { options, parserErrors } = parseImportOptions((key) =>
+        this.cellText(row, headers, key),
       );
-      const options = QUESTION_IMPORT_OPTION_KEYS.map((key) => ({
-        key,
-        text: this.cellText(row, headers, `option_${key.toLowerCase()}`),
-        isCorrect: correctKeys.has(key),
-      })).filter((option) => option.text.length > 0);
       const assets = imagesByRow.get(rowNumber) ?? [];
       const hasImageMarker = Boolean(this.cellText(row, headers, 'image'));
 
@@ -72,6 +73,7 @@ export class XlsxQuestionImportParser {
           'question_format',
         ).toUpperCase(),
         options,
+        parserErrors,
         correctAnswer: this.cellText(row, headers, 'essay_answer') || undefined,
         assets,
         parserWarnings:

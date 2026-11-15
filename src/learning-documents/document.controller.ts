@@ -230,7 +230,10 @@ export class DocumentController {
   @Post(':id/purge')
   @HttpCode(204)
   @ApiOperation({ summary: 'Permanently delete stored files of a document' })
-  @ApiResponse({ status: 204, description: 'Stored objects deleted; idempotent' })
+  @ApiResponse({
+    status: 204,
+    description: 'Stored objects deleted; idempotent',
+  })
   @ApiResponse({ status: 409, description: 'Not archived/revoked or in use' })
   purge(@Req() req: LecturerRequest, @Param('id', ParseUUIDPipe) id: string) {
     return this.service.purge(req.user.id, id);
@@ -308,6 +311,25 @@ export class DocumentController {
     @Query('limit', new ParseIntPipe({ optional: true })) limit = 20,
   ) {
     return this.service.content(req.user.id, id, version, page, limit);
+  }
+
+  /** Informed opt-in: lets a PARTIAL extraction feed RAG, plans and generation. */
+  @Post(':id/versions/:versionId/confirm-partial')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Confirm using the extracted pages of a PARTIAL document',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Version status and partial_confirmed_at; idempotent',
+  })
+  @ApiResponse({ status: 409, description: 'DOCUMENT_NOT_PARTIAL' })
+  confirmPartial(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('versionId', ParseUUIDPipe) version: string,
+  ) {
+    return this.service.confirmPartial(req.user.id, id, version);
   }
 
   /** Access revocation does not silently promise physical object purging. */

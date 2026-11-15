@@ -3,7 +3,11 @@ import {
   outlineSchema,
   FrozenPlan,
 } from '../question-generation/knowledge-plan.contract';
-import { matchesQuestionConfigs } from '../question-generation/question-generation.contract';
+import {
+  matchesQuestionConfigs,
+  totalQuestionCount,
+} from '../question-generation/question-generation.contract';
+import { parseGenerationEvidenceDetails } from '../question-generation/generation-evidence.contract';
 import type { QuestionConfig } from '../question-generation/question-generation.contract';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -35,6 +39,7 @@ export class RagClient {
     path: string,
     body?: unknown,
     timeout = 55_000,
+    requestedCount?: number,
   ): Promise<unknown> {
     if (!this.enabled || !this.options.enabled)
       throw new DocumentProcessingError('RAG_DISABLED');
@@ -124,7 +129,19 @@ export class RagClient {
           'retryable' in error &&
           error.retryable === true &&
           [429, 502, 503, 504].includes(response.status);
-        throw new DocumentProcessingError(code, retry);
+        const evidenceDetails =
+          path === 'generate' &&
+          response.status === 422 &&
+          code === 'RAG_INSUFFICIENT_EVIDENCE' &&
+          requestedCount !== undefined &&
+          typeof error === 'object' &&
+          error !== null &&
+          'retryable' in error &&
+          error.retryable === false &&
+          'diagnostics' in error
+            ? parseGenerationEvidenceDetails(error.diagnostics, requestedCount)
+            : undefined;
+        throw new DocumentProcessingError(code, retry, evidenceDetails);
       }
       return json;
     } catch (error) {
@@ -219,7 +236,14 @@ export class RagClient {
     plan_items?: Omit<FrozenPlan['items'][number], 'node_id'>[];
   }) {
     const parsed = groundedResponseSchema.safeParse(
-      await this.request('generate', body, 85_000),
+      await this.request(
+        'generate',
+        body,
+        this.options.enabled
+          ? Math.max(85_000, this.options.timeoutMs)
+          : 85_000,
+        totalQuestionCount(body.question_configs),
+      ),
     );
     if (
       !parsed.success ||

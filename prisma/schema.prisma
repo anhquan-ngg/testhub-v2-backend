@@ -769,6 +769,7 @@ enum LearningDocumentStatus {
   QUEUED
   PROCESSING
   EXTRACTED
+  PARTIAL
   OCR_REQUIRED
   FAILED
 }
@@ -799,37 +800,39 @@ model LearningDocument {
 }
 
 model LearningDocumentVersion {
-  id                String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  document_id       String                    @db.Uuid
-  version           Int
-  created_at        DateTime                  @default(now())
-  updated_at        DateTime                  @updatedAt
-  file_name         String                    @db.VarChar(200)
-  source_type       LearningDocumentType
-  mime_type         String
-  declared_size     Int
-  include_notes     Boolean                   @default(false)
-  consented_at      DateTime
-  upload_key        String                    @unique
-  upload_expires_at DateTime
-  source_key        String?                   @unique
-  source_sha256     String?                   @db.Char(64)
-  artifact_key      String?                   @unique
-  artifact_sha256   String?                   @db.Char(64)
-  parser_version    String?
-  unit_count        Int?
-  warnings          Json?
-  status            LearningDocumentStatus    @default(UPLOADING)
-  error_code        String?
-  execution_id      String?                   @db.Uuid
-  lease_expires_at  DateTime?
-  extraction_count  Int                       @default(0)
-  next_dispatch_at  DateTime                  @default(now())
-  dispatch_count    Int                       @default(0)
-  document          LearningDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
-  indexes           LearningDocumentIndex[]
-  generationBatches QuestionGenerationBatch[]
-  knowledgePlans    KnowledgePlan[]
+  id                   String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  document_id          String                    @db.Uuid
+  version              Int
+  created_at           DateTime                  @default(now())
+  updated_at           DateTime                  @updatedAt
+  file_name            String                    @db.VarChar(200)
+  source_type          LearningDocumentType
+  mime_type            String
+  declared_size        Int
+  include_notes        Boolean                   @default(false)
+  consented_at         DateTime
+  upload_key           String                    @unique
+  upload_expires_at    DateTime
+  source_key           String?                   @unique
+  source_sha256        String?                   @db.Char(64)
+  artifact_key         String?                   @unique
+  artifact_sha256      String?                   @db.Char(64)
+  parser_version       String?
+  unit_count           Int?
+  warnings             Json?
+  quality              Json?
+  partial_confirmed_at DateTime?
+  status               LearningDocumentStatus    @default(UPLOADING)
+  error_code           String?
+  execution_id         String?                   @db.Uuid
+  lease_expires_at     DateTime?
+  extraction_count     Int                       @default(0)
+  next_dispatch_at     DateTime                  @default(now())
+  dispatch_count       Int                       @default(0)
+  document             LearningDocument          @relation(fields: [document_id], references: [id], onDelete: Cascade)
+  indexes              LearningDocumentIndex[]
+  generationBatches    QuestionGenerationBatch[]
+  knowledgePlans       KnowledgePlan[]
 
   @@unique([document_id, version])
   @@index([status, next_dispatch_at])

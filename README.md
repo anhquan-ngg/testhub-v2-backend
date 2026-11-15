@@ -76,6 +76,9 @@ existing tokens require login again. See [auth session setup and contract](docs/
   edit and flag AI_SOURCE_RECHECK_AFTER_EDIT; a new revision still needs approval.
   Recovery must retain provenance without reissuing generation. Only the existing
   approved commit writes Question. Original evidence is not proof of correctness.
+- Insufficient-evidence failures return AI_INSUFFICIENT_EVIDENCE, never a paid retry.
+  Safe slot-only diagnostics survive reload through the existing attempt JSON;
+  see [safe errors and persistence](docs/ai-question-generation.md#safe-errors).
 
 ## Current RAG implementation (2026-10-21)
 

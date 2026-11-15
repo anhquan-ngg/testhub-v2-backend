@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
 import { S3Service } from '../s3/s3.service';
 import { DocumentRepository } from './document.repository';
@@ -59,6 +60,8 @@ export class DocumentExecution {
           parser_version: result.parser_version,
           unit_count: result.unit_count,
           warnings: result.warnings,
+          quality: result.quality ?? Prisma.JsonNull,
+          partial_confirmed_at: null,
           error_code: null,
         },
         ownerId,

@@ -5,6 +5,7 @@ import { RagRepository } from '../learning-documents/rag.repository';
 import { RagService } from '../learning-documents/rag.service';
 import { RagClient } from '../learning-documents/rag-client.service';
 import { DocumentProcessingError } from '../learning-documents/document-client.service';
+import { isUsableSource } from '../learning-documents/document.contract';
 import {
   QuestionGenerationException,
   GenerationErrorCode,
@@ -15,6 +16,8 @@ import {
 } from './question-generation.contract';
 import { QuestionProvenance } from './grounded-generation.contract';
 import { expandPlanItems, frozenPlanSchema } from './knowledge-plan.contract';
+import { parseGenerationEvidenceDetails } from './generation-evidence.contract';
+import { totalQuestionCount } from './question-generation.contract';
 
 type SourceInput = {
   created_by: string;
@@ -80,6 +83,8 @@ export class DocumentGenerationService {
     )
       this.fail('AI_DOCUMENT_SOURCE_INVALID');
     if (source.status === 'OCR_REQUIRED') this.fail('AI_DOCUMENT_OCR_REQUIRED');
+    if (source.status === 'PARTIAL' && !source.partial_confirmed_at)
+      this.fail('AI_DOCUMENT_PARTIAL_UNCONFIRMED');
     if (source.status === 'FAILED') this.fail('AI_DOCUMENT_FAILED');
     return source;
   }
@@ -87,7 +92,7 @@ export class DocumentGenerationService {
   async prepare(input: SourceInput) {
     this.enabled();
     const source = await this.source(input);
-    if (source.status !== 'EXTRACTED')
+    if (!isUsableSource(source.status, source.partial_confirmed_at))
       return { ready: false, stage: 'EXTRACTING' as const, index: null };
     const index = input.source_index_id
       ? await this.indexes.forVersion(
@@ -155,9 +160,21 @@ export class DocumentGenerationService {
             ? 'AI_SERVICE_TIMEOUT'
             : error.code === 'RAG_OUTPUT_INVALID'
               ? 'AI_OUTPUT_INVALID'
-              : 'AI_SERVICE_FAILED',
+              : [
+                    'RAG_INSUFFICIENT_EVIDENCE',
+                    'RAG_PLAN_ITEM_INSUFFICIENT_CONTEXT',
+                    'RAG_INSUFFICIENT_CONTEXT',
+                  ].includes(error.code)
+                ? 'AI_INSUFFICIENT_EVIDENCE'
+                : 'AI_SERVICE_FAILED',
           HttpStatus.BAD_GATEWAY,
           'Document generation failed',
+          error.code === 'RAG_INSUFFICIENT_EVIDENCE'
+            ? parseGenerationEvidenceDetails(
+                error.evidenceDetails,
+                totalQuestionCount(input.question_configs),
+              )
+            : undefined,
         );
       throw error;
     }

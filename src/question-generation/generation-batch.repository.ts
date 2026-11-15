@@ -4,6 +4,11 @@ import {
   expandPlanItems,
 } from './knowledge-plan.contract';
 import type { QuestionProvenance } from './grounded-generation.contract';
+import {
+  generationFailureSchema,
+  parseGenerationEvidenceDetails,
+  GenerationEvidenceDetails,
+} from './generation-evidence.contract';
 import { ConflictException, Injectable } from '@nestjs/common';
 import {
   Prisma,
@@ -156,7 +161,10 @@ export class GenerationBatchRepository {
           const version = await tx.learningDocumentVersion.findFirst({
             where: {
               id: command.source.version_id,
-              status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] },
+              OR: [
+                { status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] } },
+                { status: 'PARTIAL', partial_confirmed_at: { not: null } },
+              ],
               document: {
                 created_by: ownerId,
                 is_deleted: false,
@@ -243,13 +251,39 @@ export class GenerationBatchRepository {
   async findOwned(ownerId: string, id: string) {
     const batch = await this.prisma.questionGenerationBatch.findFirst({
       where: { id, ...this.ownerScope(ownerId) },
-      select: { ...publicBatchSelect, chapter: { select: { topic_id: true } } },
+      select: {
+        ...publicBatchSelect,
+        chapter: { select: { topic_id: true } },
+        execution_id: true,
+        attempts: {
+          where: {
+            status: AttemptStatus.FAILED,
+            error_code: 'AI_INSUFFICIENT_EVIDENCE',
+          },
+          select: { id: true, result: true },
+        },
+      },
     });
     if (!batch || (batch.chapter && batch.chapter.topic_id !== batch.topic_id))
       return null;
-    const { chapter, ...safe } = batch;
+    const { chapter, execution_id, attempts, ...safe } = batch;
     void chapter;
-    return safe;
+    const failure = generationFailureSchema.safeParse(
+      attempts?.find(({ id }) => id === execution_id)?.result,
+    );
+    const errorDetails =
+      batch.status === BatchStatus.FAILED &&
+      batch.error_code === 'AI_INSUFFICIENT_EVIDENCE' &&
+      failure.success
+        ? parseGenerationEvidenceDetails(
+            failure.data.error_details,
+            batch.requested_count,
+          )
+        : undefined;
+    return {
+      ...safe,
+      ...(errorDetails ? { error_details: errorDetails } : {}),
+    };
   }
 
   /** Return a consistent paginated view of persisted review drafts. */
@@ -473,7 +507,13 @@ export class GenerationBatchRepository {
   }
 
   /** Keep failures safe and fence old workers from overwriting completed executions. */
-  async fail(id: string, executionId: string, code: string, unknown = false) {
+  async fail(
+    id: string,
+    executionId: string,
+    code: string,
+    unknown = false,
+    evidenceDetails?: GenerationEvidenceDetails,
+  ) {
     return this.prisma.$transaction(async (tx) => {
       const changed = await tx.questionGenerationBatch.updateMany({
         where: {
@@ -488,15 +528,44 @@ export class GenerationBatchRepository {
           lease_expires_at: null,
         },
       });
-      if (changed.count)
-        await tx.questionGenerationAttempt.update({
-          where: { id: executionId },
+      if (!changed.count) return;
+      await tx.questionGenerationAttempt.update({
+        where: { id: executionId },
+        data: {
+          status: unknown ? AttemptStatus.UNKNOWN : AttemptStatus.FAILED,
+          error_code: code,
+          finished_at: new Date(),
+        },
+      });
+      if (code === 'AI_INSUFFICIENT_EVIDENCE' && !unknown) {
+        const batch = await tx.questionGenerationBatch.findUnique({
+          where: { id },
+          select: { requested_count: true },
+        });
+        const safeDetails = batch
+          ? parseGenerationEvidenceDetails(
+              evidenceDetails,
+              batch.requested_count,
+            )
+          : undefined;
+        // A saved successful result must remain recoverable, even if failure arrives late.
+        await tx.questionGenerationAttempt.updateMany({
+          where: {
+            id: executionId,
+            batch_id: id,
+            status: AttemptStatus.FAILED,
+            result: { equals: Prisma.DbNull },
+            batch: { execution_id: executionId, status: BatchStatus.FAILED },
+          },
           data: {
-            status: unknown ? AttemptStatus.UNKNOWN : AttemptStatus.FAILED,
-            error_code: code,
-            finished_at: new Date(),
+            result: {
+              contract_version: 'question-generation-failure.v1',
+              code: 'AI_INSUFFICIENT_EVIDENCE',
+              ...(safeDetails ? { error_details: safeDetails } : {}),
+            } satisfies Prisma.InputJsonObject,
           },
         });
+      }
     });
   }
 

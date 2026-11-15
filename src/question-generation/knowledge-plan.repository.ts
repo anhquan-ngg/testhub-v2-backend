@@ -21,6 +21,7 @@ const publicSelect = {
   source_version_id: true,
   status: true,
   revision: true,
+  question_configs: true,
   content_map: true,
   matrix: true,
   error_code: true,
@@ -84,7 +85,10 @@ export class KnowledgePlanRepository {
               topic_id: input.topic_id,
               archived_at: null,
             },
-            status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] },
+            OR: [
+              { status: { in: ['QUEUED', 'PROCESSING', 'EXTRACTED'] } },
+              { status: 'PARTIAL', partial_confirmed_at: { not: null } },
+            ],
           },
           select: { id: true, document_id: true },
         });
@@ -247,6 +251,24 @@ export class KnowledgePlanRepository {
         execution_id: null,
         lease_expires_at: null,
         next_prepare_at: new Date(Date.now() + 5000),
+      },
+    });
+  }
+
+  /**
+   * Re-queue a FAILED plan. The creation time is renewed so the 20-minute
+   * preparation window starts again; lease and error state are cleared.
+   */
+  retry(owner: string, id: string) {
+    return this.prisma.knowledgePlan.updateMany({
+      where: { id, status: 'FAILED', ...this.scope(owner) },
+      data: {
+        status: 'WAITING_SOURCE',
+        error_code: null,
+        execution_id: null,
+        lease_expires_at: null,
+        next_prepare_at: new Date(),
+        created_at: new Date(),
       },
     });
   }

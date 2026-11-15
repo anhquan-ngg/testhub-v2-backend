@@ -2,6 +2,7 @@ import {
   CreateKnowledgePlanDto,
   EditKnowledgePlanDto,
   PlanRevisionDto,
+  RebuildMatrixDto,
 } from './dto/knowledge-plan.dto';
 import {
   Body,
@@ -113,6 +114,24 @@ export class KnowledgePlanController {
     return this.plans.edit(req.user.id, id, input);
   }
 
+  @ApiBody({ type: RebuildMatrixDto })
+  @Post(':id/rebuild-matrix')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Save the edited chapter list and regenerate the matrix to the batch size',
+  })
+  @ApiResponse({ status: 200, description: 'Plan with a rebuilt matrix' })
+  @ApiResponse({ status: 400, description: 'Invalid chapter list' })
+  @ApiResponse({ status: 409, description: 'Plan changed or not editable' })
+  rebuildMatrix(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() input: unknown,
+  ) {
+    return this.plans.rebuildMatrix(req.user.id, id, input);
+  }
+
   @ApiBody({ type: PlanRevisionDto })
   @Post(':id/approve')
   @HttpCode(200)
@@ -126,6 +145,18 @@ export class KnowledgePlanController {
     @Body() input: unknown,
   ) {
     return this.plans.approve(req.user.id, id, input);
+  }
+
+  @Post(':id/retry')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Re-queue a FAILED plan after the cause was fixed; reloading never retries',
+  })
+  @ApiResponse({ status: 200, description: 'Plan back in WAITING_SOURCE' })
+  @ApiResponse({ status: 409, description: 'PLAN_NOT_RETRYABLE' })
+  retry(@Req() req: LecturerRequest, @Param('id', ParseUUIDPipe) id: string) {
+    return this.plans.retry(req.user.id, id);
   }
 
   @ApiBody({ type: PlanRevisionDto })

@@ -59,6 +59,20 @@
   type/level per position). MULTIPLE_CHOICE drafts need 2-3 correct of 4, also on
   edit; approved commits write the draft's question_type to Question.
 
+## Grounded evidence failures
+
+- Map RAG_INSUFFICIENT_EVIDENCE and legacy context-shortage codes to
+  AI_INSUFFICIENT_EVIDENCE, not AI_OUTPUT_INVALID. Treat evidence shortages as
+  nonretryable failures: no partial drafts or automatic paid invocation.
+- Accept diagnostics only as bounded unique in-request 1-based slot/reason pairs.
+  Slots follow frozen-plan item order expanded by count; never trust model labels,
+  objectives or arbitrary text. Unknown slots remain an empty issues list.
+- Persist sanitized failure metadata in the existing fenced attempt result, not
+  a schema migration. Expose optional error_details only through owned batch
+  detail; stale executions must not write it or turn a failure into success.
+- Keep success/text contracts, citation validation and embedding selection intact.
+  See docs/architecture/AI_QUESTION_GENERATION_FLOW.md for refusal vs invalid output.
+
 ## File-based RAG question generation (2026-10-23)
 
 - The batch API also accepts source.mode=document with immutable version_id and
@@ -256,7 +270,7 @@ Không có `.env.example` (README nhắc tới nhưng file không tồn tại). 
 
 Luồng thử nghiệm Gemini trực tiếp đã gỡ; Gemini thuộc `../testhub-ai-service`. Module generation có batch/staging, worker FastAPI, review/revision và commit đã duyệt. Xem `docs/ai-question-generation.md` và `.env.ai.example`.
 
-Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_RAG_ENABLED`, `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
+Biến tích hợp mới: `AI_QUESTION_GENERATION_ENABLED` (mặc định false), `AI_RAG_ENABLED`, `AI_SERVICE_BASE_URL`, `AI_SERVICE_INTERNAL_TOKEN`, `AI_SERVICE_TIMEOUT_MS` (mặc định 35000; phải lớn hơn deadline grounded của Python, ví dụ 130000 với `GENERATION_TIMEOUT_MS=110000`; call RAG `generate` dùng `max(85000, AI_SERVICE_TIMEOUT_MS)`). Token trùng `INTERNAL_API_TOKEN` của Python; không đặt key Gemini ở backend/frontend. Cấu hình đọc một lần khi khởi tạo module; không retry HTTP ở NestJS vì Python đã retry SDK.
 
 `docker-compose.yaml` còn dùng `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `REDIS_PASSWORD`, `DOCKER_DATABASE_URL`, `DOCKER_AI_SERVICE_BASE_URL`. Khi thêm biến mới, ghi tên biến vào mục này (không ghi giá trị).
 

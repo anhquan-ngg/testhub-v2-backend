@@ -27,6 +27,7 @@ export type ParsedImportQuestion = {
   correctAnswer?: string;
   assets: ParsedImportAsset[];
   parserWarnings: string[];
+  parserErrors?: string[];
 };
 
 export type ImportQuestionData = {

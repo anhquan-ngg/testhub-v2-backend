@@ -16,6 +16,17 @@ export class AcceptedGenerationBatchDto {
   @ApiProperty() status_url: string;
 }
 
+class GenerationEvidenceIssueDto {
+  @ApiProperty({ minimum: 1, maximum: 20 }) slot: number;
+  @ApiProperty({ enum: ['INSUFFICIENT_EVIDENCE', 'NO_RETRIEVED_CONTEXT'] })
+  reason: 'INSUFFICIENT_EVIDENCE' | 'NO_RETRIEVED_CONTEXT';
+}
+
+class GenerationEvidenceDetailsDto {
+  @ApiProperty({ type: [GenerationEvidenceIssueDto], maxItems: 20 })
+  issues: GenerationEvidenceIssueDto[];
+}
+
 /** Safe polling projection of an owned batch. */
 export class GenerationBatchResponseDto {
   @ApiProperty({
@@ -56,6 +67,13 @@ export class GenerationBatchResponseDto {
   requested_count: number;
   @ApiProperty() total_items: number;
   @ApiProperty({ type: String, nullable: true }) error_code: string | null;
+  @ApiProperty({
+    type: GenerationEvidenceDetailsDto,
+    required: false,
+    description:
+      'Owned detail only: sanitized insufficient-evidence slots. Empty issues means affected slots are unknown.',
+  })
+  error_details?: GenerationEvidenceDetailsDto;
   @ApiProperty({ type: String, format: 'date-time' }) created_at: Date;
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   started_at: Date | null;

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { RagClient } from './rag-client.service';
 import { RagRepository } from './rag.repository';
 import { retrieveCommandSchema } from './rag.contract';
+import { isUsableSource } from './document.contract';
 import { DocumentRepository } from './document.repository';
 import { DocumentProcessingError } from './document-client.service';
 
@@ -52,7 +53,7 @@ export class RagService {
     this.enabled();
     const source = await this.documents.version(owner, document, version);
     if (!source) throw new NotFoundException('Document version not found');
-    if (source.status !== 'EXTRACTED')
+    if (!isUsableSource(source.status, source.partial_confirmed_at))
       throw new ConflictException('RAG_SOURCE_NOT_EXTRACTED');
     const profile = await this.call(() => this.client.profile());
     const result = await this.repository.create(

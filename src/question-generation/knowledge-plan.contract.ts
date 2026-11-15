@@ -1,5 +1,8 @@
 import { QuestionFormat } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { expandQuestionConfigs } from './question-generation.contract';
+import type { QuestionConfig } from './question-generation.contract';
 
 export const sourceUnitSchema = z
   .object({
@@ -199,6 +202,103 @@ export function normalizedChapterName(name: string): string {
     .trim()
     .replace(/\s+/gu, ' ')
     .toLocaleLowerCase('vi');
+}
+
+/**
+ * Make sibling names unique without merging topics: a repeated name is
+ * qualified with its own evidence text, then with an "(n)" suffix. Nodes with
+ * unique names are returned unchanged.
+ */
+export function disambiguateSiblings<
+  T extends { id: string; parent_id: string | null; name: string },
+>(nodes: T[], evidence: (node: T) => string = () => ''): T[] {
+  const taken = new Map<string | null, Set<string>>();
+  const counts = new Map<string, number>();
+  for (const node of nodes) {
+    const key = `${node.parent_id}|${normalizedChapterName(node.name)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const fit = (value: string) => value.slice(0, 200).trim();
+  return nodes.map((node) => {
+    const names = taken.get(node.parent_id) ?? new Set<string>();
+    taken.set(node.parent_id, names);
+    let name = node.name;
+    const duplicated =
+      (counts.get(`${node.parent_id}|${normalizedChapterName(node.name)}`) ??
+        0) > 1;
+    if (duplicated && names.has(normalizedChapterName(name))) {
+      const hint = evidence(node).trim();
+      const qualified = hint ? fit(`${node.name} (${hint.slice(0, 60)})`) : '';
+      name = qualified;
+      for (let n = 2; !name || names.has(normalizedChapterName(name)); n++)
+        name = fit(`${node.name.slice(0, 190)} (${n})`);
+    }
+    names.add(normalizedChapterName(name));
+    return name === node.name ? node : { ...node, name };
+  });
+}
+
+/** Number of questions a matrix asks for across every row and cognitive level. */
+export function matrixTotal(rows: PlanMatrix['rows']): number {
+  return rows.reduce(
+    (sum, row) => sum + levels.reduce((n, level) => n + row.counts[level], 0),
+    0,
+  );
+}
+
+/**
+ * Distribute the batch's question slots over the leaf chapters. The result
+ * always totals exactly the requested batch size, so it is safe to rebuild
+ * after the chapter list changed.
+ */
+export function buildMatrix(
+  nodes: Array<Pick<PlanNode, 'id' | 'parent_id' | 'name' | 'source_units'>>,
+  configs: QuestionConfig[],
+): PlanMatrix {
+  const plain = nodes.map(({ id, parent_id, name, source_units }) => ({
+    id,
+    parent_id,
+    name,
+    source_units,
+  }));
+  const parents = new Set(plain.map((node) => node.parent_id));
+  const leaves = plain.filter((node) => !parents.has(node.id));
+  const slots = expandQuestionConfigs(configs);
+  const used = Math.min(leaves.length, slots.length);
+  if (!used) throw new PlanOutlineInvalidError();
+  const selected = Array.from(
+    { length: used },
+    (_, index) => leaves[Math.floor((index * leaves.length) / used)],
+  );
+  const grouped = new Map<string, PlanMatrix['rows'][number]>();
+  for (const [index, slot] of slots.entries()) {
+    const node = selected[index % selected.length];
+    const key = `${node.id}/${slot.question_type}`;
+    const row = grouped.get(key) ?? {
+      id: randomUUID(),
+      node_id: node.id,
+      question_type: slot.question_type,
+      objective: `Kiểm tra kiến thức về ${node.name}`.slice(0, 400),
+      source_units: node.source_units,
+      counts: { KNOWLEDGE: 0, UNDERSTANDING: 0, APPLYING: 0, ADVANCED: 0 },
+    };
+    row.counts[slot.question_format]++;
+    grouped.set(key, row);
+  }
+  const parsed = planMatrixSchema.safeParse({
+    nodes: plain,
+    rows: [...grouped.values()],
+  });
+  if (!parsed.success) throw new PlanOutlineInvalidError();
+  return parsed.data;
+}
+
+/** Raised when the AI outline cannot become a valid plan matrix; maps to PLAN_OUTLINE_INVALID. */
+export class PlanOutlineInvalidError extends Error {
+  constructor() {
+    super('Outline cannot be converted into a valid plan matrix');
+    this.name = 'PlanOutlineInvalidError';
+  }
 }
 
 /** Freeze the exact cognitive cells and their target nodes in deterministic row/level order. */

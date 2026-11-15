@@ -303,7 +303,10 @@ export class QuestionImportService {
     const copiedKeys: string[] = [];
     let committed = false;
     try {
-      const requestedIds = dto.item_ids?.length ? dto.item_ids : undefined;
+      if (dto.item_ids && !dto.item_ids.length) {
+        throw new BadRequestException('No items selected');
+      }
+      const requestedIds = dto.item_ids ?? undefined;
       const items = await this.prisma.questionImportItem.findMany({
         where: {
           import_id: importId,
@@ -531,7 +534,15 @@ export class QuestionImportService {
       if (committed) {
         throw error;
       }
-      await Promise.all(copiedKeys.map((key) => this.s3.remove(key)));
+      // Object cleanup must not mask the transaction failure or strand its claim.
+      const cleanup = await Promise.allSettled(
+        copiedKeys.map((key) => this.s3.remove(key)),
+      );
+      if (cleanup.some((result) => result.status === 'rejected')) {
+        this.logger.warn(
+          `Import ${importId}: could not remove rolled-back objects`,
+        );
+      }
       await this.prisma.questionImport.updateMany({
         where: { id: importId, status: QuestionImportStatus.COMMITTING },
         data: {
@@ -961,7 +972,7 @@ export class QuestionImportService {
     defaultChapterId: string | null | undefined,
     tree: ChapterTree,
   ): ValidationResult {
-    const errors: string[] = [];
+    const errors: string[] = [...(question.parserErrors ?? [])];
     const warnings = [...question.parserWarnings];
     const { chapterId, chapterPath } = this.resolveChapter(
       question,

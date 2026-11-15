@@ -142,6 +142,11 @@ Settings are read once during Nest module initialization; restart after changes.
 When disabled, no AI URL/token is required. Enabled invalid config fails startup
 with variable names only. Python defaults to a 30000 ms generation deadline;
 increase Nest's deadline when increasing Python's, allowing internal-network time.
+Deadlines must nest: `AI_SERVICE_TIMEOUT_MS` > Python grounded deadline
+(`max(75000, GENERATION_TIMEOUT_MS + 15000)` or `GROUNDED_GENERATION_TIMEOUT_MS`)
+> `GENERATION_TIMEOUT_MS` > `ROUTER_TIMEOUT_MS`. The RAG `generate` call uses
+`max(85000, AI_SERVICE_TIMEOUT_MS)`. For slow 9Router reasoning models use
+`ROUTER_TIMEOUT_MS=100000`, `GENERATION_TIMEOUT_MS=110000`, `AI_SERVICE_TIMEOUT_MS=130000`.
 Use a private network and HTTPS when the transport is not an isolated local
 network. Redirects are refused to prevent token forwarding. Response bodies are
 limited to 1 MiB, decoded as strict UTF-8 and validated as JSON.
@@ -177,6 +182,29 @@ the existing frontend refresh flow incorrectly.
 
 Python's existing generic 502 cannot distinguish invalid provider JSON from other
 provider failures. Keep that ambiguity; do not infer whether a retry is safe.
+
+Document generation maps `RAG_INSUFFICIENT_EVIDENCE`,
+`RAG_PLAN_ITEM_INSUFFICIENT_CONTEXT` and `RAG_INSUFFICIENT_CONTEXT` to the terminal
+batch code `AI_INSUFFICIENT_EVIDENCE` (the internal error boundary remains 502).
+Malformed generated output remains `AI_OUTPUT_INVALID`. No generation retry or
+fallback call is added.
+
+Only HTTP 422 `RAG_INSUFFICIENT_EVIDENCE` with `retryable:false` may supply
+`diagnostics:{issues:[{slot,reason}]}`. Diagnostics are all-or-nothing: at most 20
+unique integer slots within 1..requested_count, with reason exactly
+`INSUFFICIENT_EVIDENCE` or `NO_RETRIEVED_CONTEXT`, and no extra fields. An empty
+issues array means legacy empty output with unknown affected slots; absent or
+invalid diagnostics are omitted, not inferred. Provider text, IDs and reason prose
+are never stored or returned as diagnostics.
+
+A current execution's failure checkpoint uses existing
+`QuestionGenerationAttempt.result` JSON:
+`{contract_version:'question-generation-failure.v1',code:'AI_INSUFFICIENT_EVIDENCE',error_details?:{issues:[{slot,reason}]}}`.
+The execution-fenced failure transaction only fills an empty result, preserving any
+successful durable output. Owned batch detail GET revalidates and exposes optional
+`error_details:{issues:[{slot,reason}]}` after reload, only for the matching failed
+attempt and error code. Lists do not include it. No schema migration is needed;
+other error/status and ambiguous recovery behavior is unchanged.
 
 ## Verification
 

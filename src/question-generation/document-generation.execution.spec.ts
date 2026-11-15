@@ -108,6 +108,84 @@ describe('Durable document generation phases', () => {
     );
     expect(repo.finish).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    { issues: [{ slot: 1, reason: 'INSUFFICIENT_EVIDENCE' as const }] },
+    { issues: [] },
+  ])(
+    'persists evidence failures without retrying generation or saving drafts: %j',
+    async (details) => {
+      batch.status = 'QUEUED';
+      docs.generate.mockRejectedValue(
+        new QuestionGenerationException(
+          'AI_INSUFFICIENT_EVIDENCE',
+          HttpStatus.BAD_GATEWAY,
+          'Document generation failed',
+          details,
+        ),
+      );
+      await execution.process('batch');
+      expect(repo.fail).toHaveBeenCalledWith(
+        'batch',
+        'execution',
+        'AI_INSUFFICIENT_EVIDENCE',
+        false,
+        details,
+      );
+      expect(docs.generate).toHaveBeenCalledTimes(1);
+      expect(repo.saveResult).not.toHaveBeenCalled();
+      expect(repo.finish).not.toHaveBeenCalled();
+      expect(generation.generateDrafts).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    null,
+    {
+      contract_version: 'question-generation-failure.v1',
+      code: 'AI_INSUFFICIENT_EVIDENCE',
+      error_details: { issues: [] },
+    },
+  ])(
+    'recovers missing or tagged failure results as UNKNOWN without a provider retry: %j',
+    async (result) => {
+      batch.status = 'GENERATING';
+      batch.execution_id = 'execution';
+      batch.lease_expires_at = new Date(0);
+      batch.attempts = [{ id: 'execution', result }];
+      await execution.recover('batch');
+      expect(repo.fail).toHaveBeenCalledWith(
+        'batch',
+        'execution',
+        'AI_EXECUTION_INTERRUPTED',
+        true,
+      );
+      expect(repo.finish).not.toHaveBeenCalled();
+      expect(docs.generate).not.toHaveBeenCalled();
+      expect(generation.generateDrafts).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not reconcile a terminal evidence failure or call the provider again', async () => {
+    batch.status = 'FAILED';
+    batch.execution_id = 'execution';
+    batch.lease_expires_at = new Date(0);
+    batch.attempts = [
+      {
+        id: 'execution',
+        result: {
+          contract_version: 'question-generation-failure.v1',
+          code: 'AI_INSUFFICIENT_EVIDENCE',
+          error_details: { issues: [] },
+        },
+      },
+    ];
+    await execution.recover('batch');
+    expect(repo.fail).not.toHaveBeenCalled();
+    expect(repo.finish).not.toHaveBeenCalled();
+    expect(docs.generate).not.toHaveBeenCalled();
+    expect(generation.generateDrafts).not.toHaveBeenCalled();
+  });
+
   it('does not issue another paid call after losing persistence', async () => {
     batch.status = 'QUEUED';
     repo.saveResult.mockRejectedValue(new Error('private'));

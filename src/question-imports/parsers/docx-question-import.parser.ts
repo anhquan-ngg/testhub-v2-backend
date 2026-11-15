@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { load } from 'cheerio';
 import * as mammoth from 'mammoth';
-import { QUESTION_IMPORT_OPTION_KEYS } from '../question-import.constants';
+import { parseImportOptions } from './import-options';
 import {
   ParsedImportAsset,
   ParsedImportQuestion,
@@ -36,7 +36,20 @@ export class DocxQuestionImportParser {
       const firstKey = this.normalizeKey(
         $(table).find('tr').first().find('td,th').first().text(),
       );
-      if (firstKey !== 'code') return;
+      if (firstKey !== 'code') {
+        // Ignore instruction tables with a header, but not question tables
+        // whose required first row was removed or moved.
+        if (
+          /^(chapter(_id)?|question_(text|type|format)|option_[a-f]|correct_keys|essay_answer|image)$/.test(
+            firstKey,
+          )
+        ) {
+          throw new BadRequestException(
+            'Question tables must start with the code field',
+          );
+        }
+        return;
+      }
 
       const fields = new Map<string, string>();
       $(table)
@@ -45,17 +58,26 @@ export class DocxQuestionImportParser {
           const cells = $(row).find('td,th');
           if (cells.length < 2) return;
           const key = this.normalizeKey($(cells[0]).text());
+          if (fields.has(key)) {
+            throw new BadRequestException(`Duplicate question field: ${key}`);
+          }
           const valueCell = $(cells[1]).clone();
           valueCell.find('br').replaceWith('\n');
+          valueCell.find('p').append('\n');
           fields.set(key, valueCell.text().trim());
         });
 
-      if (
-        !fields.has('code') ||
-        !fields.has('question_text') ||
-        !fields.has('question_type')
-      ) {
-        return;
+      for (const required of [
+        'code',
+        'question_text',
+        'question_type',
+        'question_format',
+      ]) {
+        if (!fields.has(required)) {
+          throw new BadRequestException(
+            `Missing required question field: ${required}`,
+          );
+        }
       }
 
       const tableAssets = $(table)
@@ -79,17 +101,9 @@ export class DocxQuestionImportParser {
     sourceIndex: number,
     assets: ParsedImportAsset[],
   ): ParsedImportQuestion {
-    const correctKeys = new Set(
-      (fields.get('correct_keys') ?? '')
-        .toUpperCase()
-        .split(/[\s,;]+/)
-        .filter(Boolean),
+    const { options, parserErrors } = parseImportOptions(
+      (key) => fields.get(key)?.trim() ?? '',
     );
-    const options = QUESTION_IMPORT_OPTION_KEYS.map((key) => ({
-      key,
-      text: fields.get(`option_${key.toLowerCase()}`)?.trim() ?? '',
-      isCorrect: correctKeys.has(key),
-    })).filter((option) => option.text.length > 0);
 
     return {
       sourceIndex,
@@ -100,6 +114,7 @@ export class DocxQuestionImportParser {
       questionType: (fields.get('question_type') ?? '').toUpperCase(),
       questionFormat: (fields.get('question_format') ?? '').toUpperCase(),
       options,
+      parserErrors,
       correctAnswer: fields.get('essay_answer') || undefined,
       assets,
       parserWarnings: [],

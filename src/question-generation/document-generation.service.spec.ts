@@ -5,6 +5,8 @@ import { RagRepository } from '../learning-documents/rag.repository';
 import { RagService } from '../learning-documents/rag.service';
 import { RagClient } from '../learning-documents/rag-client.service';
 import { readContractFixture } from './fixtures/contract-fixture';
+import { DocumentProcessingError } from '../learning-documents/document-client.service';
+import { GenerationEvidenceDetails } from './generation-evidence.contract';
 
 describe('Document generation authorization and preparation', () => {
   const fixture = readContractFixture();
@@ -76,6 +78,7 @@ describe('Document generation authorization and preparation', () => {
       null,
       { ...source, document: { ...source.document, chapter_id: randomUUID() } },
       { ...source, status: 'OCR_REQUIRED' },
+      { ...source, status: 'PARTIAL', partial_confirmed_at: null },
       { ...source, status: 'UPLOADING' },
     ]) {
       documents.source.mockResolvedValue(candidate);
@@ -88,6 +91,19 @@ describe('Document generation authorization and preparation', () => {
     }
     expect(client.generate).not.toHaveBeenCalled();
     expect(rag.start).not.toHaveBeenCalled();
+  });
+  it('accepts a PARTIAL source only after the lecturer confirmed it', async () => {
+    documents.source.mockResolvedValue({
+      ...source,
+      status: 'PARTIAL',
+      partial_confirmed_at: new Date(),
+    });
+    await expect(
+      service.authorize('owner', {
+        ...fixture.command,
+        source: { mode: 'document', version_id: version, query: '' },
+      }),
+    ).resolves.toBeDefined();
   });
   it('waits for extraction without queueing embeddings or invoking generation', async () => {
     documents.source.mockResolvedValue({ ...source, status: 'PROCESSING' });
@@ -104,6 +120,49 @@ describe('Document generation authorization and preparation', () => {
     expect((await service.prepare(input)).ready).toBe(true);
     expect(rag.start).not.toHaveBeenCalled();
   });
+  it.each([
+    ['RAG_INSUFFICIENT_EVIDENCE', 'AI_INSUFFICIENT_EVIDENCE'],
+    ['RAG_PLAN_ITEM_INSUFFICIENT_CONTEXT', 'AI_INSUFFICIENT_EVIDENCE'],
+    ['RAG_INSUFFICIENT_CONTEXT', 'AI_INSUFFICIENT_EVIDENCE'],
+    ['RAG_OUTPUT_INVALID', 'AI_OUTPUT_INVALID'],
+    ['RAG_DEADLINE', 'AI_SERVICE_TIMEOUT'],
+    ['RAG_GENERATION_TIMEOUT', 'AI_SERVICE_TIMEOUT'],
+    ['RAG_SERVICE_FAILED', 'AI_SERVICE_FAILED'],
+  ])(
+    'maps %s to %s without changing gateway status or invoking again',
+    async (upstream, code) => {
+      const details: GenerationEvidenceDetails = {
+        issues: [{ slot: 1, reason: 'NO_RETRIEVED_CONTEXT' }],
+      };
+      client.generate.mockRejectedValue(
+        new DocumentProcessingError(upstream, false, details),
+      );
+      await expect(service.generate(input, 'Data')).rejects.toMatchObject({
+        code,
+        status: 502,
+        evidenceDetails:
+          upstream === 'RAG_INSUFFICIENT_EVIDENCE' ? details : undefined,
+      });
+      expect(client.generate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('revalidates evidence slots against the actual command before propagation', async () => {
+    const count = input.question_configs.reduce(
+      (sum, row) => sum + row.count,
+      0,
+    );
+    client.generate.mockRejectedValue(
+      new DocumentProcessingError('RAG_INSUFFICIENT_EVIDENCE', false, {
+        issues: [{ slot: count + 1, reason: 'INSUFFICIENT_EVIDENCE' }],
+      }),
+    );
+    await expect(service.generate(input, 'Data')).rejects.toMatchObject({
+      code: 'AI_INSUFFICIENT_EVIDENCE',
+      evidenceDetails: undefined,
+    });
+  });
+
   it('retains evidence separately from editable bank-shaped JSON', async () => {
     const result = await service.generate(input, 'Data structures');
     expect(result.questions[0]).toEqual(fixture.internal_response.questions[0]);
