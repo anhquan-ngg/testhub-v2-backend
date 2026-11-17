@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { AiQuestionClient } from './ai-question-client.service';
 import { readContractFixture } from './fixtures/contract-fixture';
 import { DocumentClient } from '../learning-documents/document-client.service';
+import { extractionSchema } from '../learning-documents/document.contract';
 import { ConfigService } from '@nestjs/config';
 
 // Separate opt-in gate: standalone backend CI does not require Python/sibling repo.
@@ -169,82 +170,99 @@ integration('NestJS -> FastAPI real HTTP contract (fake LLM)', () => {
     },
     20000,
   );
-  it('indexes, retrieves and revokes through real FastAPI RAG routes (synthetic vectors/storage)', async () => {
-    const client = new RagClient(
-      new ConfigService({
-        AI_RAG_ENABLED: 'true',
-        AI_QUESTION_GENERATION_ENABLED: 'true',
-        AI_SERVICE_BASE_URL: new URL(generateUrl).origin,
-        AI_SERVICE_INTERNAL_TOKEN: 'contract-only-internal-token-123456789',
-      }),
-    );
-    const profile = await client.profile();
-    const command = {
-      index_id: randomUUID(),
-      profile_id: profile.profile_id,
-      scope: {
-        owner_id: randomUUID(),
-        topic_id: randomUUID(),
-        chapter_id: randomUUID(),
-        document_id: randomUUID(),
-        version_id: randomUUID(),
-      },
-    };
-    const extraction = {
-      contract_version: 'document-extraction.v1' as const,
-      source_type: 'PDF' as const,
-      source_sha256: 'a'.repeat(64),
-      parser_version: 'fixture/v1',
-      include_notes: false,
-      status: 'EXTRACTED' as const,
-      unit_count: 1,
-      spans: [
-        {
-          kind: 'PAGE' as const,
-          position: 1,
-          text: 'A stack uses the Last In First Out (LIFO) principle.',
+  it.each(['EXTRACTED', 'PARTIAL'] as const)(
+    'indexes, retrieves and revokes %s through real FastAPI RAG routes (synthetic vectors/storage)',
+    async (status) => {
+      const client = new RagClient(
+        new ConfigService({
+          AI_RAG_ENABLED: 'true',
+          AI_QUESTION_GENERATION_ENABLED: 'true',
+          AI_SERVICE_BASE_URL: new URL(generateUrl).origin,
+          AI_SERVICE_INTERNAL_TOKEN: 'contract-only-internal-token-123456789',
+        }),
+      );
+      const profile = await client.profile();
+      const command = {
+        index_id: randomUUID(),
+        profile_id: profile.profile_id,
+        scope: {
+          owner_id: randomUUID(),
+          topic_id: randomUUID(),
+          chapter_id: randomUUID(),
+          document_id: randomUUID(),
+          version_id: randomUUID(),
         },
-      ],
-      warnings: [],
-    };
-    expect((await client.prepare(command, extraction)).completed_chunks).toBe(
-      0,
-    );
-    expect((await client.step(command)).status).toBe('READY');
-    expect((await client.step(command)).completed_chunks).toBe(1);
-    const query = {
-      owner_id: command.scope.owner_id,
-      profile_id: profile.profile_id,
-      index_ids: [command.index_id],
-      query: 'LIFO',
-      top_k: 6,
-    };
-    const result = await client.retrieve(query);
-    expect(result.quality_status).toBe('UNASSESSED');
-    expect(result.chunks[0].text).toBe(
-      'A stack uses the Last In First Out (LIFO) principle.',
-    );
-    await expect(
-      client.retrieve({ ...query, owner_id: randomUUID() }),
-    ).rejects.toMatchObject({ code: 'RAG_SCOPE_UNAVAILABLE' });
-    const generated = await client.generate({
-      ...query,
-      question_configs: [
-        {
-          question_type: 'SINGLE_CHOICE',
-          question_format: 'KNOWLEDGE',
-          count: 1,
-        },
-      ],
-    });
-    expect(generated.questions[0].citations[0].chunk.version_id).toBe(
-      command.scope.version_id,
-    );
-    expect(generated.questions[0].citations[0].quote).toContain('LIFO');
-    expect(generated.contract_version).toBe('rag-generation.v1');
-    await client.revoke(command);
-    await expect(client.retrieve(query)).rejects.toMatchObject({
-      code: 'RAG_SCOPE_UNAVAILABLE',
-    });
-  }, 20000);
+      };
+      const extraction = extractionSchema.parse({
+        contract_version: 'document-extraction.v1' as const,
+        source_type: 'PDF' as const,
+        source_sha256: 'a'.repeat(64),
+        parser_version: 'fixture/v1',
+        include_notes: false,
+        status,
+        unit_count: status === 'PARTIAL' ? 2 : 1,
+        spans: [
+          {
+            kind: 'PAGE' as const,
+            position: 1,
+            text: 'A stack uses the Last In First Out (LIFO) principle.',
+          },
+          ...(status === 'PARTIAL'
+            ? [{ kind: 'PAGE' as const, position: 2, text: '' }]
+            : []),
+        ],
+        warnings: [],
+        ...(status === 'PARTIAL'
+          ? {
+              quality: {
+                total_units: 2,
+                text_units: 1,
+                ocr_suspected_units: [2],
+                blank_units: [],
+              },
+            }
+          : {}),
+      });
+      expect((await client.prepare(command, extraction)).completed_chunks).toBe(
+        0,
+      );
+      expect((await client.step(command)).status).toBe('READY');
+      expect((await client.step(command)).completed_chunks).toBe(1);
+      const query = {
+        owner_id: command.scope.owner_id,
+        profile_id: profile.profile_id,
+        index_ids: [command.index_id],
+        query: 'LIFO',
+        top_k: 6,
+      };
+      const result = await client.retrieve(query);
+      expect(result.quality_status).toBe('UNASSESSED');
+      expect(result.chunks[0].text).toBe(
+        'A stack uses the Last In First Out (LIFO) principle.',
+      );
+      await expect(
+        client.retrieve({ ...query, owner_id: randomUUID() }),
+      ).rejects.toMatchObject({ code: 'RAG_SCOPE_UNAVAILABLE' });
+      const generated = await client.generate({
+        ...query,
+        question_configs: [
+          {
+            question_type: 'SINGLE_CHOICE',
+            question_format: 'KNOWLEDGE',
+            count: 1,
+          },
+        ],
+      });
+      expect(generated.questions[0].citations[0].chunk.version_id).toBe(
+        command.scope.version_id,
+      );
+      expect(generated.questions[0].citations[0].quote).toContain('LIFO');
+      expect(generated.contract_version).toBe('rag-generation.v1');
+      await client.revoke(command);
+      await expect(client.retrieve(query)).rejects.toMatchObject({
+        code: 'RAG_SCOPE_UNAVAILABLE',
+      });
+    },
+    20000,
+  );
 });

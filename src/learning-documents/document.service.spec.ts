@@ -204,7 +204,7 @@ describe('Document upload and source boundaries', () => {
     const artifact = Buffer.from(
       JSON.stringify({
         contract_version: 'document-extraction.v1',
-        parser_version: 'pdf/fixture;text/v2',
+        parser_version: 'pdf/fixture;text/v3',
         source_type: 'PDF',
         source_sha256: hash,
         include_notes: false,
@@ -219,7 +219,7 @@ describe('Document upload and source boundaries', () => {
       status: 'EXTRACTED',
       artifact_key: 'donor-artifact',
       artifact_sha256: artifactHash,
-      parser_version: 'pdf/fixture;text/v2',
+      parser_version: 'pdf/fixture;text/v3',
       unit_count: 1,
       warnings: [],
     };
@@ -289,15 +289,18 @@ describe('Document upload and source boundaries', () => {
       );
       expect(repo.complete).not.toHaveBeenCalled();
     });
-    it('does not reuse an artifact produced by an older parser rule set', async () => {
-      repo.reusable.mockResolvedValue({
-        ...donor,
-        parser_version: 'pdf/fixture;text/v1',
-      });
-      const result = await reuse.complete('owner', 'doc', 'version');
-      expect(result).toMatchObject({ status: 'QUEUED' });
-      expect(repo.completeReused).not.toHaveBeenCalled();
-    });
+    it.each(['text/v1', 'text/v2'])(
+      'does not reuse an artifact produced by older parser rules %s',
+      async (rules) => {
+        repo.reusable.mockResolvedValue({
+          ...donor,
+          parser_version: `pdf/fixture;${rules}`,
+        });
+        const result = await reuse.complete('owner', 'doc', 'version');
+        expect(result).toMatchObject({ status: 'QUEUED' });
+        expect(repo.completeReused).not.toHaveBeenCalled();
+      },
+    );
     it('falls back to the queue without a donor, with a tampered artifact, or after a lost race', async () => {
       repo.reusable.mockResolvedValueOnce(null);
       expect(await reuse.complete('owner', 'doc', 'version')).toMatchObject({

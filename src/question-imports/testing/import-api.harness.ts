@@ -96,6 +96,8 @@ export async function startImportDatabase() {
           'exec',
           name,
           'pg_isready',
+          '-h',
+          '127.0.0.1',
           '-U',
           'import_fixture',
           '-d',

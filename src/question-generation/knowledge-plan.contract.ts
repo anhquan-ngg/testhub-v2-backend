@@ -188,9 +188,16 @@ export function topologicalNodes(nodes: PlanNode[]): PlanNode[] {
     siblings.push(node);
     children.set(node.parent_id, siblings);
   }
-  const result = [...(children.get(null) ?? [])];
-  for (let index = 0; index < result.length; index++)
-    result.push(...(children.get(result[index].id) ?? []));
+  const queue = [...(children.get(null) ?? [])];
+  const result: PlanNode[] = [];
+  const visited = new Set<string>();
+  for (let index = 0; index < queue.length; index++) {
+    const node = queue[index];
+    if (visited.has(node.id)) continue;
+    visited.add(node.id);
+    result.push(node);
+    queue.push(...(children.get(node.id) ?? []));
+  }
   if (result.length !== nodes.length) throw new Error('Cycle');
   return result;
 }
@@ -217,6 +224,15 @@ export function disambiguateSiblings<
   for (const node of nodes) {
     const key = `${node.parent_id}|${normalizedChapterName(node.name)}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const node of nodes) {
+    if (
+      counts.get(`${node.parent_id}|${normalizedChapterName(node.name)}`) !== 1
+    )
+      continue;
+    const names = taken.get(node.parent_id) ?? new Set<string>();
+    names.add(normalizedChapterName(node.name));
+    taken.set(node.parent_id, names);
   }
   const fit = (value: string) => value.slice(0, 200).trim();
   return nodes.map((node) => {
@@ -261,6 +277,8 @@ export function buildMatrix(
     name,
     source_units,
   }));
+  if (new Set(plain.map((node) => node.id)).size !== plain.length)
+    throw new PlanOutlineInvalidError();
   const parents = new Set(plain.map((node) => node.parent_id));
   const leaves = plain.filter((node) => !parents.has(node.id));
   const slots = expandQuestionConfigs(configs);

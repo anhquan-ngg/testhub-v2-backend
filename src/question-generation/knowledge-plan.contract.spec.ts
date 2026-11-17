@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
+  buildMatrix,
+  disambiguateSiblings,
   freezeMatrix,
+  normalizedChapterName,
+  PlanOutlineInvalidError,
   planMatrixSchema,
   PlanMatrix,
   topologicalNodes,
@@ -112,6 +116,63 @@ describe('Knowledge matrix invariants', () => {
     );
     expect(planMatrixSchema.safeParse(value).success).toBe(true);
   });
+  it.each([false, true])(
+    'rejects duplicate IDs without looping (reachable cycle: %s)',
+    (cyclic) => {
+      const root = matrix().nodes[0];
+      const nodes = [
+        root,
+        { ...root, name: 'Repeated', parent_id: cyclic ? root.id : null },
+        { ...root, id: randomUUID(), name: 'Leaf', parent_id: root.id },
+      ];
+      expect(() => topologicalNodes(nodes)).toThrow();
+      expect(() =>
+        buildMatrix(nodes, [
+          {
+            question_type: 'SINGLE_CHOICE',
+            question_format: 'KNOWLEDGE',
+            count: 1,
+          },
+        ]),
+      ).toThrow(PlanOutlineInvalidError);
+      expect(planMatrixSchema.safeParse({ ...matrix(), nodes }).success).toBe(
+        false,
+      );
+    },
+  );
+  it.each([false, true])(
+    'reserves unique original sibling names (numeric collision: %s)',
+    (numericCollision) => {
+      const names = ['A', 'A', 'A (x)', ...(numericCollision ? ['A (2)'] : [])];
+      const nodes = names.map((name, index) => ({
+        id: randomUUID(),
+        parent_id: null,
+        name,
+        evidence: index === 1 ? 'x' : '',
+        source_units: units,
+      }));
+      const renamed = disambiguateSiblings(nodes, (node) => node.evidence);
+      expect(renamed.map((node) => node.name)).toEqual([
+        'A',
+        numericCollision ? 'A (3)' : 'A (2)',
+        'A (x)',
+        ...(numericCollision ? ['A (2)'] : []),
+      ]);
+      expect(
+        new Set(renamed.map((node) => normalizedChapterName(node.name))).size,
+      ).toBe(nodes.length);
+      expect(() =>
+        buildMatrix(renamed, [
+          {
+            question_type: 'SINGLE_CHOICE',
+            question_format: 'KNOWLEDGE',
+            count: nodes.length,
+          },
+        ]),
+      ).not.toThrow();
+      expect(nodes[1].name).toBe('A');
+    },
+  );
   it('sorts deep trees iteratively without a depth limit', () => {
     const nodes = Array.from({ length: 1000 }, (_, index) => ({
       id: randomUUID(),

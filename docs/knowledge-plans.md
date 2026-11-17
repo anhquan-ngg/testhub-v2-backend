@@ -57,6 +57,10 @@ pages/slides, empty objectives/rows and totals outside 1–20 are rejected. Ther
 no configured tree-depth limit; resource bounds are 1,000 nodes, 20 rows/cells and
 the existing extraction/index size limits. The UI reports leaf topics without a
 matrix row; proposing a plan does not imply every topic will be assessed.
+Outline rebuilding rejects duplicate node IDs before schema validation, and tree
+traversal visits each ID at most once even for malformed cyclic input. Repeated
+sibling names are qualified with evidence or a numeric suffix while reserving
+original unique sibling names, so disambiguation cannot overwrite them.
 
 APPROVED plans can be edited into a new REVIEW_REQUIRED revision. Existing batch
 snapshots remain immutable. Stale edits/confirmation/generation return conflict;
