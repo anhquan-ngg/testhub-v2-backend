@@ -424,6 +424,8 @@ Tầng 9Router: nên tạo **combo ưu tiên tuần tự** (không dùng `fusion
 
 Dựng `DocumentParser`; nếu `rag_enabled`: `GoogleEmbeddingProvider`, vector repository (pool `SelectorRepository` trên Windows) và `RagService` (lỗi → log `rag_initialization_unavailable`). Provider tạo qua `create_provider` khi `llm_provider == "9router"` hoặc có khoá Gemini; `ProviderError` → `generator=None` + log `generation_provider_unavailable`. `GroundedGeneration` chỉ tồn tại khi có cả rag và generator. Khi tắt, đóng mọi tài nguyên.
 
+**Hạ tầng lưu vector:** Compose build image PostgreSQL 17.9 Alpine kèm pgvector 0.8.1 từ `docker/postgres/Dockerfile`, pin cùng base digest cho build/runtime và kiểm tra SHA-256 mã nguồn extension. Binary/control/SQL của extension nằm trong image nên không mất khi tạo lại container; kích hoạt extension, role và migration RAG vẫn là thao tác DBA riêng. Giữ nguyên named volume và contract FE/NestJS. Nếu catalog còn extension nhưng image thiếu `$libdir/vector`, `/prepare` có thể thành công trong khi `/step` trả `RAG_STORAGE_UNAVAILABLE` 503 (`UndefinedFile`, SQLSTATE `58P01`); `pipeline aborted` chỉ là lỗi kéo theo. Cần backup đã kiểm chứng và image tương thích, không xóa volume/extension hay reset ngân sách embedding. Xem [quy trình phục hồi RAG](../rag-indexing.md#recovering-undefinedfile--sqlstate-58p01). `/ready` kiểm tra schema/quyền truy cập, không thay thế kiểm thử phép toán vector hoặc provider.
+
 ### 6.4 Các bước xử lý
 
 **AI-1 — Text** (`QuestionGenerator.generate`, `AI: app/services/question_generator.py:115`)

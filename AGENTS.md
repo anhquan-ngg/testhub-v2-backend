@@ -22,7 +22,7 @@
 ## Local Compose generation profile (2026-11-02)
 
 - `docker compose --profile generation up -d --build` starts API + AI worker + document/indexing worker with existing PostgreSQL/Redis. Host Python and frontend stay separate; do not run competing PM2/manual backend processes.
-- Default Compose remains infrastructure-only. Preserve the Postgres image, container names and volumes; pgvector/RAG setup and migrations remain explicit operator prerequisites, never automatic at build/startup.
+- Default Compose remains infrastructure-only. PostgreSQL uses `docker/postgres/Dockerfile`: identical digest-pinned PostgreSQL 17.9 Alpine build/runtime stages plus checksum-verified pgvector 0.8.1. Preserve container names, volumes and the isolated build context. Extension activation/RAG schema/migrations remain explicit operator prerequisites, never automatic at build/startup. Before image upgrades/recreation, verify server/libc/catalog compatibility and a recoverable backup; never assume a volume preserves manually installed server libraries. See docs/rag-indexing.md for SQLSTATE 58P01 recovery.
 - Shared Dockerfile builds Linux Prisma Client and Nest output without host dependencies or secrets. Keep `.dockerignore` allowlisted; never COPY `.env`, keys, local data or continuity into an image.
 - Container DB/Redis hosts are `postgres`/`redis`; Python defaults to `host.docker.internal:8000`. Optional `DOCKER_DATABASE_URL` and `DOCKER_AI_SERVICE_BASE_URL` override container settings only. The opt-in local profile enables AI/RAG and uses development cookies.
 - See docs/docker-generation.md for setup and shutdown. `node --test scripts/compose.test.cjs` resolves synthetic configuration without reading real secrets or starting queues.

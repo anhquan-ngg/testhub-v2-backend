@@ -210,7 +210,7 @@ Use existing local PostgreSQL/Redis, or deliberately start the infrastructure-on
 docker compose up -d postgres redis
 ```
 
-This starts infrastructure and writes persistent volumes. It does **not** start the API, workers, Python, frontend or S3; PostgreSQL's image lacks pgvector. Match the host `.env` credentials to the actual initialized services. Never delete/recreate existing volumes to resolve a configuration mismatch.
+This builds/starts infrastructure and writes persistent volumes. It does **not** start the API, workers, Python, frontend or S3. PostgreSQL uses the local digest-pinned 17.9 Alpine image with pgvector 0.8.1 built in; enabling the extension and applying AI schema migrations are still manual. Back up an existing database and check image compatibility before its first recreation; see [RAG recovery](docs/rag-indexing.md#recovering-undefinedfile--sqlstate-58p01). Match the host `.env` credentials to the actual initialized services. Never delete/recreate existing volumes to resolve a configuration mismatch.
 
 Prisma configuration reads `DATABASE_URL` even for generation. Generate the client and inspect migration state:
 
@@ -367,7 +367,7 @@ Nest calls the private Python 3.12/FastAPI service, normally port `8000`, with `
 | `POST /internal/rag/retrieve`, `/internal/rag/generate` | Scoped embedding retrieval / cited question generation. |
 | `POST /internal/rag/revoke` | Eventual technical tombstone after business revocation; not guaranteed physical deletion. |
 
-RAG uses the **same PostgreSQL database** through a separate AI login/schema, not Nest's business-table credentials. Default `postgres:17-alpine` has no pgvector extension. An operator must install a compatible server extension, review/run Python's `migrations\000_bootstrap.sql` as the appropriate DBA, set the dedicated role password securely, then apply `001_rag.sql` and `002_optional_document_chapter.sql` as the AI schema owner. Prisma migrations cover business tables only; runtime never performs this AI bootstrap. Follow [RAG setup](docs/rag-indexing.md) and the [AI README](https://github.com/anhquan-ngg/testhub-ai-service#readme), including backup/restore cautions before changing database images/volumes.
+RAG uses the **same PostgreSQL database** through a separate AI login/schema, not Nest's business-table credentials. Compose builds a compatible PostgreSQL 17.9 Alpine image with persistent pgvector 0.8.1 server files from [the PostgreSQL Dockerfile](docker/postgres/Dockerfile); external/native databases need their own extension installation. An operator must still review/run Python's `migrations\000_bootstrap.sql` as the appropriate DBA, set the dedicated role password securely, then apply `001_rag.sql` and `002_optional_document_chapter.sql` as the AI schema owner. Prisma migrations cover business tables only; runtime never performs this AI bootstrap. Follow [RAG setup](docs/rag-indexing.md) and the [AI README](https://github.com/anhquan-ngg/testhub-ai-service#readme), including backup/restore cautions before changing database images/volumes.
 
 Python-only settings include `INTERNAL_API_TOKEN`, `RAG_ENABLED`, `RAG_DATABASE_URL`, `GEMINI_API_KEY` and provider selection. Switching generation to **9Router changes generation only**: embeddings remain Google's `gemini-embedding-001`, 768 dimensions, and `GEMINI_API_KEY` remains required with RAG. Optional generation fallback may involve another provider. Do not put provider keys in Nest/frontend or assume readiness proves provider quota/model access.
 
@@ -410,7 +410,7 @@ The profile overrides AI/RAG flags to `true`, `NODE_ENV` to `development`, datab
 
 The multi-stage Node 22 image generates Prisma/builds on Linux, installs Chromium/fonts, runs as non-root and excludes host secrets/dependencies. The final image does not include the Prisma migration tooling/schema directory for an operator migration job. Build/start does not migrate or seed. API healthcheck is `GET /`; workers have no HTTP readiness endpoint. Shutdown allows four minutes to drain work. See [container setup](docs/docker-generation.md).
 
-Never use `down -v` against valuable data. Even ordinary `down` removes containers and can lose a manually installed pgvector package despite surviving volumes; prefer targeted stop for an existing local setup. Do not publish plain `docker compose config` output: interpolation can reveal secrets; `docker compose config --quiet` validates without dumping resolved configuration.
+Never use `down -v` against valuable data. Ordinary `down` also removes containers; prefer targeted stop for an existing local setup. The new PostgreSQL image preserves pgvector files across recreation, unlike a manual installation in a stock container, but is not a substitute for database backups. Do not publish plain `docker compose config` output: interpolation can reveal secrets; `docker compose config --quiet` validates without dumping resolved configuration.
 
 ## Troubleshooting
 

@@ -569,6 +569,55 @@ export class GenerationBatchRepository {
     });
   }
 
+  /**
+   * Return a transiently failed execution to QUEUED so the outbox re-dispatches it.
+   * Fenced by execution id and bounded by `maxRetries`; returns false when the
+   * caller must fail the batch instead. Only valid for failures that happened
+   * before a paid model call, and only while the attempt holds no result.
+   */
+  async requeueForRetry(
+    id: string,
+    executionId: string,
+    code: string,
+    delayMs: number,
+    maxRetries: number,
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const changed = await tx.questionGenerationBatch.updateMany({
+        where: {
+          id,
+          execution_id: executionId,
+          status: BatchStatus.GENERATING,
+          generation_retry_count: { lt: maxRetries },
+          attempts: {
+            some: { id: executionId, result: { equals: Prisma.DbNull } },
+          },
+        },
+        data: {
+          status: BatchStatus.QUEUED,
+          execution_id: null,
+          lease_expires_at: null,
+          started_at: null,
+          error_code: null,
+          generation_retry_count: { increment: 1 },
+        },
+      });
+      if (!changed.count) return false;
+      // batch_id is unique, so the failed attempt must go before claim() creates the next one.
+      await tx.questionGenerationAttempt.deleteMany({
+        where: { id: executionId, batch_id: id },
+      });
+      await tx.questionGenerationOutbox.updateMany({
+        where: { batch_id: id },
+        data: {
+          next_dispatch_at: new Date(Date.now() + delayMs),
+          error_code: code,
+        },
+      });
+      return true;
+    });
+  }
+
   /** Prepare sources without claiming a paid LLM attempt. Conditional writes fence duplicate jobs. */
   async prepared(
     id: string,

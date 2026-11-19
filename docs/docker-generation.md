@@ -8,11 +8,14 @@ frontend remain on the host. Run commands from the backend repository.
 
 1. Docker Desktop must be running with Linux containers. Keep the existing
    Compose project/directory so its `postgres_data` and `redis_data` volumes are
-   reused. The Postgres image, container names, ports and volumes are unchanged.
-   This profile does not install pgvector: the existing database must already
-   have the extension, dedicated AI role and RAG schema/migrations described in
-   [RAG setup](rag-indexing.md). Do not replace/recreate a Postgres container to
-   upgrade its image without checking how pgvector was installed and backing up.
+   reused. Container names, ports and volumes are unchanged. Postgres now builds
+   from the isolated `docker/postgres` context: digest-pinned PostgreSQL 17.9
+   Alpine plus pgvector 0.8.1 server files, persistent across recreation. Build
+   and test this image, check the existing server/catalog compatibility and take
+   a verified backup before first replacing the old stock image; follow the
+   [RAG recovery procedure](rag-indexing.md#recovering-undefinedfile--sqlstate-58p01).
+   Extension activation, dedicated AI role and RAG migrations remain manual
+   prerequisites described in [RAG setup](rag-indexing.md), not startup actions.
 2. Keep a configured backend `.env` (runtime-only, never copied into the image).
    Existing auth/JWT, OAuth, encryption, S3, consent and AI settings are still
    required. API and both workers receive the same configuration. In particular:
@@ -110,8 +113,9 @@ force-killing workers during provider calls: ambiguous attempts are not
 transparently safe to reissue. No paid retry behavior was changed.
 
 Do not use `down -v`: it deletes persistent data. Ordinary `down` also removes
-containers, which can remove a manually installed pgvector package even though
-volumes survive; prefer the targeted `stop` above for the existing local setup.
+containers; prefer the targeted `stop` above for the existing local setup. The
+custom PostgreSQL image retains pgvector files on recreation, unlike manual
+installation inside a stock container. This does not replace verified backups.
 
 ## Troubleshooting and functional check
 

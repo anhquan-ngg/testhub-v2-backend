@@ -21,7 +21,11 @@ import {
 } from './question-generation.contract';
 import type { GeneratedQuestion } from './question-generation.contract';
 import { QuestionGenerationException } from './question-generation.errors';
-import { AI_PERSISTENCE_ATTEMPTS } from './question-generation.constants';
+import {
+  AI_MAX_GENERATION_RETRIES,
+  AI_PERSISTENCE_ATTEMPTS,
+  generationRetryDelayMs,
+} from './question-generation.constants';
 
 /** One provider invocation per claimed execution; persistence can be replayed. */
 @Injectable()
@@ -116,6 +120,25 @@ export class GenerationExecutionService {
         error instanceof QuestionGenerationException
           ? error.evidenceDetails
           : undefined;
+      if (
+        error instanceof QuestionGenerationException &&
+        error.retryable &&
+        AI_MAX_GENERATION_RETRIES > 0
+      ) {
+        const retry = await this.persist(() =>
+          this.repository.requeueForRetry(
+            batchId,
+            executionId,
+            code,
+            generationRetryDelayMs(batch.generation_retry_count ?? 0),
+            AI_MAX_GENERATION_RETRIES,
+          ),
+        );
+        if (retry) {
+          this.logger.warn({ event: 'ai_generation_requeued', batchId, code });
+          return;
+        }
+      }
       await this.persist(() =>
         evidenceDetails
           ? this.repository.fail(

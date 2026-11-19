@@ -26,6 +26,26 @@ export type GenerationErrorCode =
   | 'AI_OUTPUT_INVALID'
   | 'AI_INSUFFICIENT_EVIDENCE';
 
+/**
+ * Upstream codes that fail before the paid generation call (embedding,
+ * capacity, storage). RAG_DEADLINE is excluded: it can fire after the model
+ * call started, so a retry could pay twice.
+ */
+const PRE_GENERATION_RETRYABLE_CODES = new Set([
+  'RAG_EMBEDDING_RATE_LIMITED',
+  'RAG_EMBEDDING_TIMEOUT',
+  'RAG_CAPACITY_REACHED',
+  'RAG_STORAGE_UNAVAILABLE',
+]);
+
+/** Retry only when the AI service said retryable=true AND the code is pre-generation. */
+export function isSafeToRetryGeneration(error: {
+  code: string;
+  retryable: boolean;
+}): boolean {
+  return error.retryable && PRE_GENERATION_RETRYABLE_CODES.has(error.code);
+}
+
 /** Safe error boundary: never attach input, upstream body, token or raw cause. */
 export class QuestionGenerationException extends HttpException {
   readonly evidenceDetails?: GenerationEvidenceDetails;
@@ -35,6 +55,8 @@ export class QuestionGenerationException extends HttpException {
     status: HttpStatus,
     message: string,
     evidenceDetails?: GenerationEvidenceDetails,
+    /** True only for failures proven to happen before any paid model call. */
+    readonly retryable = false,
   ) {
     const parsed = generationEvidenceDetailsSchema.safeParse(evidenceDetails);
     const safeDetails =
