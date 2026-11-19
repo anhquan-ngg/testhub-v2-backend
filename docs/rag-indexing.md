@@ -14,7 +14,12 @@ citations) is now implemented; see the section below. Text API compatibility rem
   **same PostgreSQL database**, not the NestJS login. No business-table writes.
 - The document worker owns `ai-document-processing` and `ai-document-indexing`
   independently, one job each. API hosts no processors; no Celery/Kafka added.
-- EXTRACTED versions are eligible for explicit indexing; OCR_REQUIRED is rejected.
+- EXTRACTED versions and owner-confirmed PARTIAL versions are eligible for explicit
+  indexing; OCR_REQUIRED is rejected. `/internal/rag/prepare` accepts PARTIAL with
+  extraction quality metadata under `document-extraction.v1`; existing EXTRACTED
+  payloads without quality metadata remain compatible. The opt-in
+  `ai-fastapi.integration.spec.ts` tests both through `RagClient.prepare` and real
+  FastAPI routing, with synthetic embeddings/storage (no provider or database).
 - QUEUED -> INDEXING -> QUEUED (checkpoint) -> READY; transient errors/expired
   executions retry at most three consecutive times, then FAILED. Explicit retry
   resumes the same index. Revoke sets REVOKED in the document business transaction

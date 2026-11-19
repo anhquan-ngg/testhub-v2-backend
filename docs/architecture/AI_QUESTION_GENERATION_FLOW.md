@@ -282,7 +282,7 @@ erDiagram
 **BE-2c — Xác nhận dùng phần đã trích xuất** (`DocumentService.confirmPartial`)
 - Chỉ cho version `PARTIAL` (ngược lại 409 `DOCUMENT_NOT_PARTIAL`); đặt `partial_confirmed_at` (idempotent) và trả `{document_id, version_id, status, partial_confirmed_at}`. `content()` trả thêm `quality` và `partial_confirmed_at`.
 - Cổng nguồn (`isUsableSource(status, partial_confirmed_at)` trong `document.contract.ts`): `EXTRACTED`, hoặc `PARTIAL` đã xác nhận. Áp dụng ở `rag.service` (index/retrieve, lỗi `RAG_SOURCE_NOT_EXTRACTED`), `rag-execution.service`, `document-generation.service`, repository của plan và batch.
-- `reuseExtraction` (dùng lại kết quả của file trùng hash) chỉ nhận donor có parser hiện hành (`DOCUMENT_PARSER_RULES = 'text/v2'`, `isCurrentParser`); kết quả cũ (v1) được trích xuất lại.
+- `reuseExtraction` (dùng lại kết quả của file trùng hash) chỉ nhận donor có parser hiện hành (`DOCUMENT_PARSER_RULES = 'text/v3'`, `isCurrentParser`); kết quả cũ (v1/v2) được trích xuất lại. Quy tắc v3 bỏ qua dòng đầu/chân trang ngắn lặp lại khi kiểm tra ngưỡng nội dung hữu ích, không thay đổi span hay offset gốc.
 
 **BE-3 — Sửa/duyệt plan** (`edit`, `rebuildMatrix`, `approve`)
 - `edit` chỉ khi `REVIEW_REQUIRED|APPROVED`, ngược lại 409; `validateUnits` kiểm tra source_units thuộc content_map. `approve` chỉ khi `REVIEW_REQUIRED`; chỉ đóng băng matrix, **không tạo chapter/question**.
@@ -446,7 +446,7 @@ Dựng `DocumentParser`; nếu `rag_enabled`: `GoogleEmbeddingProvider`, vector 
   - không có đơn vị nghi OCR: `EXTRACTED` nếu có text; không có text nào → `OCR_REQUIRED` + warning `NO_USABLE_TEXT`;
   - có đơn vị nghi OCR **và** đủ text hữu dụng → `PARTIAL` + warning `PARTIAL_EXTRACTION`;
   - còn lại → `OCR_REQUIRED`.
-- Warning: `EMPTY_UNITS`, `OCR_REQUIRED`, `PARTIAL_EXTRACTION`, `NO_USABLE_TEXT`. `parser_version` có hậu tố `;text/v2`.
+- Warning: `EMPTY_UNITS`, `OCR_REQUIRED`, `PARTIAL_EXTRACTION`, `NO_USABLE_TEXT`. `parser_version` có hậu tố `;text/v3`.
 - `chunking` chấp nhận `EXTRACTED` và `PARTIAL`. Việc `PARTIAL` có được dùng hay không do NestJS quyết định qua `partial_confirmed_at` (AI service không giữ trạng thái xác nhận).
 - `content_map.disambiguate_siblings` chạy trước khi dựng `OutlineNode`: node cùng cha trùng tên được đổi tên bằng gợi ý từ bằng chứng/hậu tố "(n)" (không gộp), kèm warning `DUPLICATE_TOPIC_NAMES_DISAMBIGUATED`. NestJS lặp lại bước này (`disambiguateSiblings`) như lớp bảo vệ thứ hai trước khi xác thực ma trận.
 

@@ -42,7 +42,13 @@ Stop gracefully so the database is removed:
 Invoke-WebRequest -Method Post -Uri '<printed shutdownUrl>' -UseBasicParsing
 ```
 
-SIGINT/SIGTERM also request cleanup. If the process is forcibly killed, remove only its printed uniquely named container, never a shared/container-name pattern. Do not stop unrelated services.
+SIGINT/SIGTERM also request cleanup. Their one-shot handlers are registered before database startup. A stop requested during initialization waits for that step to finish, closes any acquired resources, and does not start the application if database startup was still pending. Database readiness uses TCP on `127.0.0.1`, like the PostgreSQL pool, rather than the temporary Unix-socket-only initialization server. If the process is forcibly killed, remove only its printed uniquely named container, never a shared/container-name pattern. Do not stop unrelated services.
+
+Offline startup/shutdown regressions (mocked resources, no Docker required):
+
+```powershell
+node node_modules\jest\bin\jest.js src\question-imports\testing\serve-import-fixture.spec.ts --runInBand
+```
 
 ## Chromium browser regression
 

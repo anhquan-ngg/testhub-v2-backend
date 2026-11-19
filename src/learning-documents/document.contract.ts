@@ -6,7 +6,7 @@ export const DOCUMENT_QUEUE = 'ai-document-processing';
 export const DOCUMENT_JOB = 'extract';
 export const DOCUMENT_LEASE_MS = 120_000;
 /** Parser rule generation; extractions from older rules are never reused. */
-export const DOCUMENT_PARSER_RULES = 'text/v2';
+export const DOCUMENT_PARSER_RULES = 'text/v3';
 
 /** True when a stored parser version was produced by the current rule set. */
 export function isCurrentParser(parserVersion: string): boolean {
