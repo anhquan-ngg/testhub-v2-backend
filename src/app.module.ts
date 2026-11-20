@@ -16,6 +16,7 @@ import { ExamsModule } from './exams/exams.module';
 import { FilesModule } from './files/files.module';
 import { ExamRegistrationsModule } from './exam-registrations/exam-registrations.module';
 import { SubmissionModule } from './submission/submission.module';
+import { ExamAnalyticsModule } from './exam-analytics/exam-analytics.module';
 import { ExamRuntimeModule } from './exam-runtime/exam-runtime.module';
 import { QuestionImportModule } from './question-imports/question-import.module';
 import { ExamPrintModule } from './exam-print/exam-print.module';
@@ -34,6 +35,7 @@ import { DocumentModule } from './learning-documents/document.module';
     NotificationModule,
     ExamRuntimeModule,
     SubmissionModule,
+    ExamAnalyticsModule,
     UsersModule,
     TopicsModule,
     ChaptersModule,
