@@ -9,6 +9,7 @@ import { isUsableSource } from '../learning-documents/document.contract';
 import {
   QuestionGenerationException,
   GenerationErrorCode,
+  isSafeToRetryGeneration,
 } from './question-generation.errors';
 import {
   GenerationCommand,
@@ -175,6 +176,7 @@ export class DocumentGenerationService {
                 totalQuestionCount(input.question_configs),
               )
             : undefined,
+          isSafeToRetryGeneration(error),
         );
       throw error;
     }

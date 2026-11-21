@@ -658,6 +658,8 @@ model QuestionGenerationBatch {
   total_items       Int                           @default(0)
   error_code        String?
   execution_id      String?                       @db.Uuid
+  /// Re-queues after a retryable pre-generation AI failure (never counts ambiguous outcomes).
+  generation_retry_count Int                      @default(0)
   lease_expires_at  DateTime?
   started_at        DateTime?
   finished_at       DateTime?

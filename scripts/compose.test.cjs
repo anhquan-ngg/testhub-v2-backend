@@ -56,8 +56,12 @@ function config({ profile = false, overrides = {} } = {}) {
 test('default startup remains infrastructure-only and retains existing volumes', () => {
   const { services, volumes } = config();
   assert.deepEqual(Object.keys(services).sort(), ['postgres', 'redis']);
-  assert.equal(services.postgres.image, 'postgres:17-alpine');
+  assert.equal(services.postgres.image, 'testhub-postgres:17.9-vector0.8.1-alpine');
+  assert.equal(services.postgres.build.dockerfile, 'Dockerfile');
+  assert.ok(services.postgres.build.context.endsWith(path.join('docker', 'postgres')));
   assert.equal(services.postgres.container_name, 'testhub_db');
+  assert.equal(services.postgres.volumes[0].source, 'postgres_data');
+  assert.equal(services.postgres.volumes[0].target, '/var/lib/postgresql/data');
   assert.equal(services.redis.container_name, 'testhub_redis');
   assert.deepEqual(Object.keys(volumes).sort(), [
     'postgres_data',

@@ -2,7 +2,7 @@
 
 ## Overview
 
-TestHub Backend is the NestJS REST and realtime service for an online examination system. It owns authentication sessions, business authorization, PostgreSQL data, question banks, exams, submissions, grading, storage access and background jobs. The sibling [web frontend](../testhub-v2/README.md) and [Python AI service](../testhub-ai-service/README.md) are separate applications.
+TestHub Backend is the NestJS REST and realtime service for an online examination system. It owns authentication sessions, business authorization, PostgreSQL data, question banks, exams, submissions, grading, storage access and background jobs. The sibling [web frontend](https://github.com/anhquan-ngg/testhub-v2#readme) and [Python AI service](https://github.com/anhquan-ngg/testhub-ai-service#readme) are separate applications.
 
 This is a standalone **npm** repository, not an `apps/exam-core` monorepo package. Prisma is the schema source of truth; there is no active ZenStack policy layer or tRPC application API. Authorization is implemented in guards, services and repositories.
 
@@ -192,10 +192,9 @@ These are distinct from host runtime settings. Configure existing database/Redis
 
 ## Installation and Local Development
 
-Run commands from this repository root. From the workspace root shown in this project:
+Open PowerShell in the directory where you cloned `testhub-v2-backend`. Run the following commands from that repository root:
 
 ```powershell
-Set-Location 'D:\HUST\20251\GR2\testhub\sources\testhub-v2-backend'
 node --version
 npm --version
 npm ci
@@ -211,7 +210,7 @@ Use existing local PostgreSQL/Redis, or deliberately start the infrastructure-on
 docker compose up -d postgres redis
 ```
 
-This starts infrastructure and writes persistent volumes. It does **not** start the API, workers, Python, frontend or S3; PostgreSQL's image lacks pgvector. Match the host `.env` credentials to the actual initialized services. Never delete/recreate existing volumes to resolve a configuration mismatch.
+This builds/starts infrastructure and writes persistent volumes. It does **not** start the API, workers, Python, frontend or S3. PostgreSQL uses the local digest-pinned 17.9 Alpine image with pgvector 0.8.1 built in; enabling the extension and applying AI schema migrations are still manual. Back up an existing database and check image compatibility before its first recreation; see [RAG recovery](docs/rag-indexing.md#recovering-undefinedfile--sqlstate-58p01). Match the host `.env` credentials to the actual initialized services. Never delete/recreate existing volumes to resolve a configuration mismatch.
 
 Prisma configuration reads `DATABASE_URL` even for generation. Generate the client and inspect migration state:
 
@@ -368,7 +367,7 @@ Nest calls the private Python 3.12/FastAPI service, normally port `8000`, with `
 | `POST /internal/rag/retrieve`, `/internal/rag/generate` | Scoped embedding retrieval / cited question generation. |
 | `POST /internal/rag/revoke` | Eventual technical tombstone after business revocation; not guaranteed physical deletion. |
 
-RAG uses the **same PostgreSQL database** through a separate AI login/schema, not Nest's business-table credentials. Default `postgres:17-alpine` has no pgvector extension. An operator must install a compatible server extension, review/run Python's `migrations\000_bootstrap.sql` as the appropriate DBA, set the dedicated role password securely, then apply `001_rag.sql` and `002_optional_document_chapter.sql` as the AI schema owner. Prisma migrations cover business tables only; runtime never performs this AI bootstrap. Follow [RAG setup](docs/rag-indexing.md) and the [AI README](../testhub-ai-service/README.md), including backup/restore cautions before changing database images/volumes.
+RAG uses the **same PostgreSQL database** through a separate AI login/schema, not Nest's business-table credentials. Compose builds a compatible PostgreSQL 17.9 Alpine image with persistent pgvector 0.8.1 server files from [the PostgreSQL Dockerfile](docker/postgres/Dockerfile); external/native databases need their own extension installation. An operator must still review/run Python's `migrations\000_bootstrap.sql` as the appropriate DBA, set the dedicated role password securely, then apply `001_rag.sql` and `002_optional_document_chapter.sql` as the AI schema owner. Prisma migrations cover business tables only; runtime never performs this AI bootstrap. Follow [RAG setup](docs/rag-indexing.md) and the [AI README](https://github.com/anhquan-ngg/testhub-ai-service#readme), including backup/restore cautions before changing database images/volumes.
 
 Python-only settings include `INTERNAL_API_TOKEN`, `RAG_ENABLED`, `RAG_DATABASE_URL`, `GEMINI_API_KEY` and provider selection. Switching generation to **9Router changes generation only**: embeddings remain Google's `gemini-embedding-001`, 768 dimensions, and `GEMINI_API_KEY` remains required with RAG. Optional generation fallback may involve another provider. Do not put provider keys in Nest/frontend or assume readiness proves provider quota/model access.
 
@@ -411,7 +410,7 @@ The profile overrides AI/RAG flags to `true`, `NODE_ENV` to `development`, datab
 
 The multi-stage Node 22 image generates Prisma/builds on Linux, installs Chromium/fonts, runs as non-root and excludes host secrets/dependencies. The final image does not include the Prisma migration tooling/schema directory for an operator migration job. Build/start does not migrate or seed. API healthcheck is `GET /`; workers have no HTTP readiness endpoint. Shutdown allows four minutes to drain work. See [container setup](docs/docker-generation.md).
 
-Never use `down -v` against valuable data. Even ordinary `down` removes containers and can lose a manually installed pgvector package despite surviving volumes; prefer targeted stop for an existing local setup. Do not publish plain `docker compose config` output: interpolation can reveal secrets; `docker compose config --quiet` validates without dumping resolved configuration.
+Never use `down -v` against valuable data. Ordinary `down` also removes containers; prefer targeted stop for an existing local setup. The new PostgreSQL image preserves pgvector files across recreation, unlike a manual installation in a stock container, but is not a substitute for database backups. Do not publish plain `docker compose config` output: interpolation can reveal secrets; `docker compose config --quiet` validates without dumping resolved configuration.
 
 ## Troubleshooting
 
@@ -453,6 +452,6 @@ Bundled report WOFF2 fonts are copied from `src\submission\fonts` at build time;
 | [Migration repair notes](docs/migration-repair-source-indexes.md) | Historical recovery context; not routine fresh-install instructions. |
 | [Import testing](src/question-imports/testing/README.md) / [parser fixtures](src/question-imports/parsers/fixtures/README.md) | Isolated import/browser checks, formats and fixture guidance. |
 | [Backend agent guide](AGENTS.md) | Repository-specific conventions and safety rules. |
-| [Frontend README](../testhub-v2/README.md) / [AI README](../testhub-ai-service/README.md) | Separate application setup, configuration and deployment boundaries. |
+| [Frontend README](https://github.com/anhquan-ngg/testhub-v2#readme) / [AI README](https://github.com/anhquan-ngg/testhub-ai-service#readme) | Separate application setup, configuration and deployment boundaries. |
 
 Feature documents may include dated rollout snapshots or platform-specific examples. Use current source/configuration as the executable contract and review pending migrations against the actual target; this README does not certify live infrastructure or provider availability.

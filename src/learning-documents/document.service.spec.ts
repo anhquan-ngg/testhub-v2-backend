@@ -292,10 +292,22 @@ describe('Document upload and source boundaries', () => {
     it.each(['text/v1', 'text/v2'])(
       'does not reuse an artifact produced by older parser rules %s',
       async (rules) => {
+        const parserVersion = `pdf/fixture;${rules}`;
+        const legacyArtifact = Buffer.from(
+          artifact
+            .toString('utf8')
+            .replace(donor.parser_version, parserVersion),
+        );
         repo.reusable.mockResolvedValue({
           ...donor,
-          parser_version: `pdf/fixture;${rules}`,
+          parser_version: parserVersion,
+          artifact_sha256: createHash('sha256')
+            .update(legacyArtifact)
+            .digest('hex'),
         });
+        store.getBoundedObject.mockImplementation((key: string) =>
+          Promise.resolve(key === 'donor-artifact' ? legacyArtifact : bytes),
+        );
         const result = await reuse.complete('owner', 'doc', 'version');
         expect(result).toMatchObject({ status: 'QUEUED' });
         expect(repo.completeReused).not.toHaveBeenCalled();

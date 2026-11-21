@@ -40,18 +40,76 @@ repeatedly clicking retry or automatically creating replacement indexes.
 
 ## 1. Local PostgreSQL and dedicated role
 
-These are **operator-run local instructions**. No user DB migration was applied
-by the coding session. Confirm host/database and back up data before changing a
-PostgreSQL installation/image.
+These are **operator-run local instructions**. Confirm host/database and back up
+data before changing a PostgreSQL installation/image. Build/start never runs
+extension creation, schema migrations or seeds automatically.
 
-Current Compose uses `postgres:17-alpine`, which lacks pgvector. Install the server
-extension matching the server major version using the
+Compose builds `testhub-postgres:17.9-vector0.8.1-alpine` from
+[`docker/postgres/Dockerfile`](../docker/postgres/Dockerfile). Both stages use the
+same digest-pinned PostgreSQL 17.9 / Alpine 3.23 base. pgvector 0.8.1 is compiled
+against that server's PGXS with a SHA-256-verified upstream archive; only installed
+extension artifacts enter the runtime image. Disabling host-specific compiler
+optimizations makes the library portable across CPUs. The build context contains
+only the PostgreSQL Dockerfile, not backend secrets or source. The library and
+control/SQL files survive container recreation; the named data volume, mount,
+container name and ports remain unchanged. Review base/extension compatibility
+and backups explicitly when updating the pinned versions.
+
+```powershell
+docker compose build postgres
+# Existing data: complete the backup/compatibility checks below before this step.
+docker compose up -d --no-deps --no-build --pull never postgres
+```
+
+This image supplies server files; a fresh database still needs the manual
+bootstrap/role/migrations below. Native Windows or externally managed PostgreSQL
+still needs its own compatible server extension using the
 [official instructions](https://github.com/pgvector/pgvector#installation).
-A supported Docker Postgres 17 image is `pgvector/pgvector:pg17`. Moving from
-Alpine should use a verified logical backup/restore or a reviewed upgrade; do not
-delete the existing volume or blindly attach it to a different image. Compose is
-intentionally unchanged. Native Windows PostgreSQL needs the upstream Windows
-extension installation; Python's psycopg package does not install pgvector.
+Python's psycopg package does not install pgvector. Moving from Alpine to a Debian
+image such as `pgvector/pgvector:pg17` requires a verified logical backup/restore
+or a reviewed upgrade, not blind reuse of the Alpine volume.
+
+### Recovering `UndefinedFile` / SQLSTATE `58P01`
+
+`could not access file "$libdir/vector"` means the catalog references pgvector but
+the running PostgreSQL image lacks its shared library. A surviving data volume
+does not preserve manually installed container packages. `/prepare` can succeed
+because it writes text; `/step` invokes vector input during embedding persistence
+and returns `RAG_STORAGE_UNAVAILABLE` (503). A later `pipeline aborted` message is
+a consequence of the failed transaction, not a separate provider problem.
+
+1. Confirm the actual PostgreSQL version, libc family, volume mount and installed
+   extension version before selecting an image. The pinned image is a matching
+   recovery path for PostgreSQL 17.9 Alpine with catalog version 0.8.1, not a
+   universal database upgrade recipe. Build and test it on a disposable database
+   before touching the existing service.
+2. Stop the scoped API/AI/document workers, then shut down PostgreSQL cleanly.
+   Take an offline physical archive of its **entire** data volume, preserving
+   ownership/permissions. Include external tablespaces/WAL if configured. Keep the
+   backup outside Git, restrict access, record its checksum and verify recovery
+   on an isolated copy. Logical dumps may themselves fail while `vector_out`
+   cannot load; copying a live data directory with ordinary tar is not safe.
+3. Recreate **only** the `postgres` service with the compatible built image and
+   the same named volume/project. Do not delete the volume, drop the extension,
+   reset migrations or alter existing vector rows. Keep the original image and
+   offline backup for recovery; never overwrite a running volume for rollback.
+4. Check the existing catalog and actual vector functions as DBA:
+
+```sql
+SELECT name, default_version, installed_version
+FROM pg_available_extensions WHERE name = 'vector';
+SELECT '[1,0,0]'::public.vector <=> '[1,0,0]'::public.vector AS distance;
+```
+
+Expected: available/installed version 0.8.1 and distance 0. Check restricted-role
+access and a rollback-only 768-dimensional write, then resume the existing workers
+and verify Python `/ready` (its old pool may need a short reconnect interval).
+Readiness alone does not test vector functions or paid provider availability.
+
+A persisted FAILED index needs the existing explicit retry action after recovery;
+reloading the page does not restart it. Retry preserves completed vectors and the
+invocation budget; do not reset the budget or repeatedly submit paid requests.
+A failed generation batch may need its own separate explicit retry.
 
 Check as DBA in the **same local database** as NestJS:
 
