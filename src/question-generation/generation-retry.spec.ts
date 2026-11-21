@@ -1,6 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
 import { GenerationExecutionService } from './generation-execution.service';
-import type { GenerationBatchRepository } from './generation-batch.repository';
 import type { QuestionGenerationService } from './question-generation.service';
 import type { DocumentGenerationService } from './document-generation.service';
 import {
@@ -112,6 +111,15 @@ describe('Transient AI failure retry', () => {
     ).toBe(false);
   });
 
+  it.each([true, false])(
+    'honors the upstream pre-model storage guarantee retryable=%s',
+    (retryable) => {
+      expect(
+        isSafeToRetryGeneration({ code: 'RAG_STORAGE_UNAVAILABLE', retryable }),
+      ).toBe(retryable);
+    },
+  );
+
   it('backs off exponentially with jitter and a cap', () => {
     const mid = () => 0.5;
     expect(generationRetryDelayMs(0, mid)).toBe(15_000);
@@ -146,7 +154,9 @@ describe('GenerationBatchRepository.requeueForRetry', () => {
     await expect(
       repository.requeueForRetry('b', 'e', 'AI_SERVICE_FAILED', 5000, 3),
     ).resolves.toBe(true);
-    const call = tx.questionGenerationBatch.updateMany.mock.calls[0][0] as {
+    const call = (
+      tx.questionGenerationBatch.updateMany.mock.calls as unknown[][]
+    )[0][0] as {
       where: Record<string, unknown>;
       data: Record<string, unknown>;
     };
@@ -173,4 +183,73 @@ describe('GenerationBatchRepository.requeueForRetry', () => {
     expect(tx.questionGenerationAttempt.deleteMany).not.toHaveBeenCalled();
     expect(tx.questionGenerationOutbox.updateMany).not.toHaveBeenCalled();
   });
+});
+
+describe('GenerationBatchRepository.markDispatch', () => {
+  it.each([true, false])(
+    'does not replace a retry schedule after delivery success=%s',
+    async (success) => {
+      const observed = new Date('2026-01-01T00:00:00Z');
+      const rescheduled = new Date(observed.getTime() + 30_000);
+      const row = {
+        next_dispatch_at: rescheduled,
+        error_code: 'AI_SERVICE_FAILED',
+      };
+      const updateMany = jest
+        .fn()
+        .mockImplementation(
+          (query: {
+            where: { id: string; next_dispatch_at?: Date };
+            data: typeof row;
+          }) => {
+            if (
+              query.where.next_dispatch_at &&
+              query.where.next_dispatch_at.getTime() !==
+                row.next_dispatch_at.getTime()
+            )
+              return Promise.resolve({ count: 0 });
+            Object.assign(row, query.data);
+            return Promise.resolve({ count: 1 });
+          },
+        );
+      const repository = new GenerationBatchRepository({
+        questionGenerationOutbox: { updateMany },
+      } as unknown as PrismaService);
+      await expect(
+        repository.markDispatch('o', 60_000, success, observed),
+      ).resolves.toEqual({ count: 0 });
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'o', next_dispatch_at: observed },
+        }),
+      );
+      expect(row).toEqual({
+        next_dispatch_at: rescheduled,
+        error_code: 'AI_SERVICE_FAILED',
+      });
+    },
+  );
+
+  it.each([true, false])(
+    'records unchanged delivery success=%s',
+    async (success) => {
+      const observed = new Date('2026-01-01T00:00:00Z');
+      const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const repository = new GenerationBatchRepository({
+        questionGenerationOutbox: { updateMany },
+      } as unknown as PrismaService);
+      await expect(
+        repository.markDispatch('o', 60_000, success, observed),
+      ).resolves.toEqual({ count: 1 });
+      expect(updateMany).toHaveBeenCalledWith({
+        where: { id: 'o', next_dispatch_at: observed },
+        data: {
+          dispatch_count: { increment: 1 },
+          next_dispatch_at: expect.any(Date) as unknown,
+          ...(success ? { dispatched_at: expect.any(Date) as unknown } : {}),
+          error_code: success ? null : 'QUEUE_UNAVAILABLE',
+        },
+      });
+    },
+  );
 });

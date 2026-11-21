@@ -110,6 +110,7 @@ export class GenerationDispatcher implements OnModuleInit, OnModuleDestroy {
           command.id,
           AI_DISPATCH_RECHECK_MS,
           true,
+          command.next_dispatch_at,
         );
       } catch {
         // Retry delivery, never the provider call. Backoff survives worker restarts.
@@ -117,7 +118,12 @@ export class GenerationDispatcher implements OnModuleInit, OnModuleDestroy {
           300_000,
           AI_RECONCILE_INTERVAL_MS * 2 ** Math.min(command.dispatch_count, 6),
         );
-        await this.repository.markDispatch(command.id, delay, false);
+        await this.repository.markDispatch(
+          command.id,
+          delay,
+          false,
+          command.next_dispatch_at,
+        );
         // A shared Redis outage should not delay all lease recovery by N timeouts.
         break;
       }

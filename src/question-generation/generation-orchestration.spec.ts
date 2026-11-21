@@ -29,11 +29,14 @@ describe('Generation orchestration failure boundaries', () => {
   function dispatcherSetup(status = 'ready') {
     const repository = {
       staleExecutions: jest.fn().mockResolvedValue([{ id: 'stale-batch' }]),
-      dispatchable: jest
-        .fn()
-        .mockResolvedValue([
-          { id: 'outbox', batch_id: 'batch', dispatch_count: 0 },
-        ]),
+      dispatchable: jest.fn().mockResolvedValue([
+        {
+          id: 'outbox',
+          batch_id: 'batch',
+          dispatch_count: 0,
+          next_dispatch_at: new Date('2026-01-01T00:00:00Z'),
+        },
+      ]),
       markDispatch: jest.fn().mockResolvedValue({}),
     };
     const execution = { recover: jest.fn().mockResolvedValue(undefined) };
@@ -84,6 +87,7 @@ describe('Generation orchestration failure boundaries', () => {
       'outbox',
       5_000,
       false,
+      new Date('2026-01-01T00:00:00Z'),
     );
     expect(queue.add).not.toHaveBeenCalled();
   });
@@ -96,6 +100,12 @@ describe('Generation orchestration failure boundaries', () => {
       dispatcher.tick(),
     ]);
     expect(repository.dispatchable).toHaveBeenCalledTimes(1);
+    expect(repository.markDispatch).toHaveBeenCalledWith(
+      'outbox',
+      expect.any(Number),
+      true,
+      new Date('2026-01-01T00:00:00Z'),
+    );
     expect(queue.add).toHaveBeenCalledWith(
       'generate-text-questions',
       { batchId: 'batch' },

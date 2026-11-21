@@ -20,7 +20,10 @@ The `internal` path routing key preserves the production client's absolute
 `/internal/rag/...` paths; the member handles `/rag/...`. The fixture's public
 test token is deliberately synthetic. It returns a source-wide outline, ordered
 planned questions with exact quotes/hashes, and a retryable 503 when the outline
-title is `fixture-unavailable`. Restart the simulation after changing handlers.
+title is `fixture-unavailable` (before any model call). Generation with query
+`fixture-after-model-unavailable` returns storage 503 with `retryable: false`,
+representing a scope-check failure after the model call; it must not cause another
+generation. Restart the simulation after changing handlers.
 Stop it with Ctrl+C. Do not enable body logging with real documents.
 
 Verified locally: outline parsing, forwarding two independent cognitive cells,

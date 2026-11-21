@@ -147,6 +147,20 @@ describe('Document generation authorization and preparation', () => {
     },
   );
 
+  it.each([true, false])(
+    'preserves the upstream storage retry phase guarantee (%s)',
+    async (retryable) => {
+      client.generate.mockRejectedValue(
+        new DocumentProcessingError('RAG_STORAGE_UNAVAILABLE', retryable),
+      );
+      await expect(service.generate(input, 'Data')).rejects.toMatchObject({
+        code: 'AI_SERVICE_FAILED',
+        retryable,
+      });
+      expect(client.generate).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('revalidates evidence slots against the actual command before propagation', async () => {
     const count = input.question_configs.reduce(
       (sum, row) => sum + row.count,

@@ -28,7 +28,9 @@ export type GenerationErrorCode =
 
 /**
  * Upstream codes that fail before the paid generation call (embedding,
- * capacity, storage). RAG_DEADLINE is excluded: it can fire after the model
+ * capacity, storage). For RAG_STORAGE_UNAVAILABLE, retryable=true is the
+ * upstream guarantee that no model call started; post-model scope checks must
+ * set it to false. RAG_DEADLINE is excluded because it can fire after the model
  * call started, so a retry could pay twice.
  */
 const PRE_GENERATION_RETRYABLE_CODES = new Set([
