@@ -81,7 +81,9 @@
 - WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
   attempt. The AI worker pins one index/profile and promotes only READY sources.
   The separate document worker still owns extraction/index checkpoints. Preparation
-  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+  expires after 20 minutes; never retry ambiguous LLM calls automatically. The only
+  retry is the fenced requeue (AI_GENERATION_MAX_RETRIES) for allow-listed pre-LLM
+  retryable codes in document mode; keep RAG_DEADLINE out of the allow-list.
 - Migration 20261023090000_add_document_question_generation adds source FKs and
   nullable item provenance. It was generated offline, not applied to user DB.
 - DocumentGenerationService authorizes sources before/after internal generation.
