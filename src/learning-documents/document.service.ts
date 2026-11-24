@@ -300,6 +300,13 @@ export class DocumentService {
   }
 
   /** Return accessible metadata and version history. */
+  /** Read safe owner-scoped metadata for background OCR progress polling. */
+  async versionDetail(ownerId: string, versionId: string) {
+    const version = await this.repository.versionDetail(ownerId, versionId);
+    if (!version) throw new NotFoundException('Document version unavailable');
+    return version;
+  }
+
   async detail(ownerId: string, id: string) {
     const result = await this.repository.detail(ownerId, id);
     if (!result) throw new NotFoundException('Document unavailable');

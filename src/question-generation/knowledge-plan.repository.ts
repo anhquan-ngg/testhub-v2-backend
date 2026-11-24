@@ -25,7 +25,7 @@ const publicSelect = {
   content_map: true,
   matrix: true,
   error_code: true,
-  sourceVersion: { select: { file_name: true } },
+  sourceVersion: { select: { file_name: true, document_id: true } },
 } satisfies Prisma.KnowledgePlanSelect;
 
 /** Durable source preparation and lecturer-reviewed plans; never creates bank chapters. */
@@ -158,7 +158,7 @@ export class KnowledgePlanRepository {
           status: true,
           revision: true,
           error_code: true,
-          sourceVersion: { select: { file_name: true } },
+          sourceVersion: { select: { file_name: true, document_id: true } },
         },
       }),
       this.prisma.knowledgePlan.count({ where }),

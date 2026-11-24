@@ -44,7 +44,17 @@ export class DocumentClient {
     bytes: Buffer,
     sourceType: 'PDF' | 'PPTX',
     includeNotes: boolean,
+    ocrPositions: number[] = [],
   ): Promise<Extraction> {
+    if (
+      ocrPositions.length > 30 ||
+      new Set(ocrPositions).size !== ocrPositions.length ||
+      ocrPositions.some(
+        (position) =>
+          !Number.isInteger(position) || position < 1 || position > 500,
+      )
+    )
+      throw new DocumentProcessingError('DOCUMENT_OCR_POSITIONS_INVALID');
     if (!this.options.enabled)
       throw new DocumentProcessingError('DOCUMENT_SERVICE_DISABLED');
     const url = new URL(
@@ -53,6 +63,9 @@ export class DocumentClient {
     );
     url.searchParams.set('source_type', sourceType);
     url.searchParams.set('include_notes', String(includeNotes));
+    url.searchParams.set('ocr_mode', ocrPositions.length ? 'targeted' : 'off');
+    if (ocrPositions.length)
+      url.searchParams.set('ocr_positions', ocrPositions.join(','));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {

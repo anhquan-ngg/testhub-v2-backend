@@ -36,6 +36,13 @@
 - npm run test:dev-runner uses real PM2/Nest with synthetic apps in an isolated temp project, never user DB/Redis/AI.
 
 
+## Explicit saved-plan OCR recovery
+
+- Ordinary document extraction must send `ocr_mode=off`. Only explicit owned lecturer consent on a saved plan revision may admit targeted OCR; browser positions/source keys are forbidden.
+- POST plan `:id/ocr` and `:id/ocr/retry` create immutable document versions. Use the owner/plan transaction locks and JSON expression unique index; do not mutate the original extraction, plan or batch. See docs/knowledge-plans.md for exact bodies and replay identity.
+- Keep `ocr_request` checkpoints durable, merge earlier added transcripts and fence every artifact/publication against current execution/lease/ownership. <=30 positions per call, <=500 deliveries; only progressing PAGE_LIMIT continuation is automatic. Other failures and expired leases must finish INCOMPLETE without paid retry.
+- GET owned version metadata exposes progress, never private object keys/leases. A recovered source requires an explicit NEW plan/index; never replay failed generation automatically. The additive OCR migration is offline only until an operator applies it.
+
 ## Knowledge plans (2026-10-25)
 
 - Lecturer generation starts with a subject-owned document, not a bank chapter.
@@ -123,7 +130,8 @@
   never process a mutable upload key. Require explicit consent and notes opt-in.
 - `npm run start:document-worker` owns separate `ai-document-processing` jobs.
   Queued versions form a durable outbox. Fence claims/results by execution UUID,
-  lease and current ownership. No paid calls occur in extraction.
+  lease and current ownership. Ordinary extraction disables paid OCR; explicit
+  plan-targeted OCR uses separate durable consent/checkpoint metadata.
 - Only Python extracts PDF/PPTX; send bounded bytes, never an arbitrary URL.
   Preserve source hash and PAGE/SLIDE/NOTES. EXTRACTED/OCR_REQUIRED are not a RAG index.
 - Block `learning-documents/` keys in legacy `/s3/*` routes and root listings;

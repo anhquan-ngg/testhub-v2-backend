@@ -6,7 +6,7 @@ export const DOCUMENT_QUEUE = 'ai-document-processing';
 export const DOCUMENT_JOB = 'extract';
 export const DOCUMENT_LEASE_MS = 120_000;
 /** Parser rule generation; extractions from older rules are never reused. */
-export const DOCUMENT_PARSER_RULES = 'text/v3';
+export const DOCUMENT_PARSER_RULES = 'text/v4';
 
 /** True when a stored parser version was produced by the current rule set. */
 export function isCurrentParser(parserVersion: string): boolean {
@@ -109,6 +109,36 @@ export const createDocumentSchema = z
   })
   .strict();
 
+/** Bounded OCR outcomes; no provider prose or source text may enter metadata. */
+export const ocrPageSchema = z
+  .object({
+    position: z.number().int().min(1).max(500),
+    status: z.enum([
+      'PENDING',
+      'COMPLETED',
+      'NO_TEXT',
+      'FAILED',
+      'BUDGET_EXHAUSTED',
+      'DISABLED',
+    ]),
+    reason: z
+      .enum([
+        'PAGE_LIMIT',
+        'TIME_BUDGET',
+        'DAILY_LIMIT',
+        'PROVIDER_ERROR',
+        'RENDER_FAILED',
+        'NO_ADDITIONAL_TEXT',
+        'OCR_DISABLED',
+        'CACHE_UNAVAILABLE',
+        'TEXT_LIMIT',
+      ])
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export type OcrPage = z.infer<typeof ocrPageSchema>;
+
 /** Per-unit extraction health; unit numbers are original PDF pages or slides. */
 export const extractionQualitySchema = z
   .object({
@@ -116,6 +146,12 @@ export const extractionQualitySchema = z
     text_units: z.number().int().min(0).max(500),
     ocr_suspected_units: z.array(z.number().int().min(1).max(500)).max(500),
     blank_units: z.array(z.number().int().min(1).max(500)).max(500),
+    ocr_units: z.array(z.number().int().min(1).max(500)).max(500).default([]),
+    ocr_candidate_units: z
+      .array(z.number().int().min(1).max(500))
+      .max(500)
+      .default([]),
+    ocr_pages: z.array(ocrPageSchema).max(500).default([]),
   })
   .strict();
 export type ExtractionQuality = z.infer<typeof extractionQualitySchema>;
@@ -181,13 +217,21 @@ export const extractionSchema = z
       ) ||
       v.spans.reduce((n, s) => n + Array.from(s.text).length, 0) > 1_000_000 ||
       (v.status !== 'OCR_REQUIRED' && !v.spans.some((s) => s.text.trim())) ||
-      (v.status === 'PARTIAL' && !v.quality?.ocr_suspected_units.length) ||
+      (v.status === 'PARTIAL' &&
+        !v.quality?.ocr_suspected_units.length &&
+        !v.quality?.ocr_pages.some(
+          (page) => !['COMPLETED', 'NO_TEXT'].includes(page.status),
+        )) ||
       (v.quality &&
         (v.quality.total_units !== v.unit_count ||
           v.quality.text_units > v.unit_count ||
-          [...v.quality.ocr_suspected_units, ...v.quality.blank_units].some(
-            (n) => n > v.unit_count,
-          )))
+          [
+            ...v.quality.ocr_suspected_units,
+            ...v.quality.blank_units,
+            ...v.quality.ocr_units,
+            ...v.quality.ocr_candidate_units,
+            ...v.quality.ocr_pages.map((page) => page.position),
+          ].some((n) => n > v.unit_count)))
     )
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

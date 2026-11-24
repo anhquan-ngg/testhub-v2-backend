@@ -28,8 +28,10 @@ DOCUMENT_SERVICE_TIMEOUT_MS=55000
 
 The integration flag currently gates both new text generation and document
 uploads/processing. Existing document metadata/preview/revocation stay available
-when it is disabled. There is no new paid API key for extraction. Python's Gemini
-key is needed only for generation, and is never placed in NestJS or the browser.
+when it is disabled. Ordinary extraction disables OCR explicitly. Optional targeted OCR requires an
+explicit lecturer action from a saved plan and Python-side provider configuration;
+provider credentials never enter NestJS or the browser. See
+[explicit OCR recovery](knowledge-plans.md#explicit-ocr-recovery-from-a-saved-plan).
 
 Review migration `20261021090000_add_learning_documents`. Against your configured
 **local development database only**, check and apply pending migrations:
@@ -105,6 +107,7 @@ bypass this new owner-scoped API. Broader legacy S3 authorization is separate wo
 | `POST /learning-documents` | `{title,topic_id,chapter_id,upload}` → 201 `{document_id,version_id,upload_url,upload_expires_at,max_bytes}` |
 | `GET /learning-documents` | Optional `topic_id`, page/limit; document metadata and latest 50 version summaries |
 | `GET /learning-documents/:id` | Document metadata and latest 50 version summaries |
+| `GET /learning-documents/versions/:versionId` | Owned safe version summary including document_id, quality, ocr_request and indexes; no object keys or leases |
 | `POST /learning-documents/:id/versions` | Upload object → 201 upload reservation |
 | `POST /learning-documents/:id/versions/:versionId/complete` | No body → 202 IDs/current status; replay does not enqueue a second execution |
 | `GET /learning-documents/:id/versions/:versionId/content` | Paginated `{data:[{kind,position,text}],total,page,limit,unit_count,warnings,status,document_id,version_id}` |
@@ -132,7 +135,7 @@ upload or extraction not ready, 503 unavailable integration/storage.
 
 ## Internal extraction contract
 
-`POST /internal/documents/extract?source_type=PDF&include_notes=false` accepts
+`POST /internal/documents/extract?source_type=PDF&include_notes=false&ocr_mode=off` accepts
 `application/octet-stream` and `X-Internal-Token`. NestJS sends only checked,
 authorized bytes; Python never fetches arbitrary URLs or holds S3 credentials.
 OpenAPI: `../testhub-ai-service/contracts/document-extraction.openapi.json`.
@@ -177,13 +180,18 @@ fully reconstructed. Source file replacement never changes an older version.
   execution tokens and 120s leases. Late results, duplicate deliveries, revoked
   documents and transferred topics cannot publish results under the old owner.
 - Source GET and artifact PUT have 30s deadlines; internal HTTP <=55s. Python's
-  45s total deadline includes intake and parser execution. Child is killed and
-  awaited on timeout/cancellation; capacity is released. No Gemini/embedding
-  call occurs during extraction, so bounded retries do not repeat paid requests.
-- Up to 3 extraction attempts, with backoff for transient transport/storage
-  failures. Stale leases return to QUEUED, or FAILED once exhausted. Permanent
-  invalid output/type/source hash errors fail without automatic retry. Queue
-  publication retries are independent of extraction attempts.
+  bounded deadline includes intake and parser execution. Child is killed and
+  awaited on timeout/cancellation; capacity is released. Ordinary extraction uses
+  `ocr_mode=off`, with no paid OCR or embedding invocation.
+- Ordinary extraction allows up to 3 attempts with backoff for transient
+  transport/storage failures. Stale ordinary leases return to QUEUED, or FAILED
+  once exhausted. Permanent invalid output/type/source hash errors do not retry.
+  Explicit OCR children instead use `ocr_mode=targeted&ocr_positions=...` with
+  <=30 server-selected positions and durable merged checkpoints. Only progressing
+  PAGE_LIMIT continuation is automatic (<=500 deliveries); provider/budget errors,
+  expired leases and ambiguous paid-call outcomes finish INCOMPLETE without blind
+  paid retry. The lecturer must explicitly consent to an immutable retry child.
+  Queue publication retries are independent of extraction/provider attempts.
 - Text artifacts are private S3 JSON, <=8 MiB, scoped to version/execution and
   hash-verified on read. Metadata excludes private keys, source bodies and leases.
   Business tables are owned by NestJS; there is no AI DB or `rag` schema yet.
@@ -204,9 +212,9 @@ with deployment resource limits for untrusted production uploads. Every replica
 multiplies local capacity; distributed quotas are later work.
 
 Unconfirmed/expired uploads and obsolete execution artifacts can remain in S3.
-Physical cleanup, retention duration, per-owner quotas, OCR, document sharing,
-rename/restore and a complete version-history browser beyond the latest 50 remain
-open work. Configure lifecycle/retention only after the policy is approved; no
+Physical cleanup, retention duration, document sharing and a complete
+version-history browser beyond the latest 50 remain open work. Explicit saved-plan
+OCR recovery is implemented separately; automatic paid upload OCR remains disabled. Configure lifecycle/retention only after the policy is approved; no
 automatic purge or TTL is promised. Generation from an uploaded document is
 implemented; see the [RAG setup and file generation guide](rag-indexing.md).
 

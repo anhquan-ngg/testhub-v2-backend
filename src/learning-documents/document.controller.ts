@@ -175,6 +175,22 @@ export class DocumentController {
   }
 
   /** Poll metadata without fetching source content. */
+  @Get('versions/:versionId')
+  @ApiOperation({
+    summary: 'Read owned immutable version and OCR recovery progress',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Safe version metadata with document_id, quality, ocr_request and indexes',
+  })
+  versionDetail(
+    @Req() req: LecturerRequest,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+  ) {
+    return this.service.versionDetail(req.user.id, versionId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Read an owned document and extraction status' })
   @ApiResponse({

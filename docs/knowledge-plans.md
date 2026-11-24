@@ -68,6 +68,61 @@ reload the saved plan before retrying. Plan creation and batch submission are
 idempotent for the same owner/key and payload. Reusing a key for other input is a
 conflict. Uploaded reservations remain only in memory, not browser storage/URLs.
 
+## Explicit OCR recovery from a saved plan
+
+Ordinary upload extraction explicitly sends `ocr_mode=off`; detecting thin or
+image-backed units never authorizes a provider call. A lecturer must save the
+matrix, review the selected scope and explicitly consent to each initial OCR or
+retry action. Source positions are derived from nonempty saved matrix rows on
+the server; the browser cannot submit positions, object keys or another source.
+
+| Route | Strict JSON body | Response |
+| --- | --- | --- |
+| `POST /question-generation-plans/:id/ocr` | `{revision: positive integer, consent: true}` | 202 `{version_id}` |
+| `POST /question-generation-plans/:id/ocr/retry` | `{revision: positive integer, consent: true, version_id: failed OCR child UUID}` | 202 `{version_id}` |
+| `GET /learning-documents/versions/:versionId` | none | Owned safe version summary, `document_id`, `quality`, `ocr_request`, indexes |
+
+`/knowledge-plans` is a compatibility alias for the plan routes. Authentication,
+LECTURER role, current ownership/topic, saved revision, source readiness, archive
+state and library byte quota are rechecked before admission. Only REVIEW_REQUIRED
+or APPROVED plans may request recovery. Same-origin plan/revision initial requests
+return the same child; explicit retries are additionally keyed by failed child ID.
+Owner/plan locks and a database expression unique index enforce this identity.
+No plan, batch, original extraction or source object is overwritten. The new
+version pins the same checked hash/options and owns a separate immutable source
+object, artifact and eventual index. Full source bytes count against library quota.
+
+`ocr_request` exposes origin_plan_id, origin_revision, parent_version_id,
+retry_of_version_id (nullable), server-selected positions, pages, deliveries and
+status PENDING|COMPLETED|INCOMPLETE. Each page has position, status
+PENDING|COMPLETED|NO_TEXT|FAILED|BUDGET_EXHAUSTED|DISABLED and an optional nullable
+allowlisted reason. Quality also exposes ocr_candidate_units (all detected
+candidates), ocr_units (positions with successfully added transcript), and
+ocr_pages. COMPLETED request processing is not a semantic evidence guarantee.
+
+The existing DB outbox/lease worker sends at most 30 positions per delivery and
+preserves earlier successful transcripts in a hash-checked checkpoint. A smaller
+Python PAGE_LIMIT continues only after demonstrable progress; at most 500
+deliveries are allowed. Provider, timeout, daily-budget, disabled/cache and
+ambiguous transport/storage outcomes do not automatically repeat paid work.
+An expired targeted lease finishes INCOMPLETE, not QUEUED. Terminal versions with
+unresolved selected positions never become EXTRACTED. Explicit retry requires a
+terminal INCOMPLETE child of the same saved revision, retries only its unresolved
+selected positions, preserves previous successful spans, and creates another
+immutable version. A repeated retry click returns that same new version.
+
+Polling/reloading only reads GET metadata. Once usable, the lecturer explicitly
+creates a NEW plan from the recovered version using the original question_configs
+(which plan detail now returns). PARTIAL use still requires explicit confirmation;
+new plan preparation creates/pins its own index. Existing plans, frozen batches
+and failed generations are never automatically rerun or redirected.
+
+Deployment requires the additive offline migration
+`20261125120000_document_plan_ocr` (nullable JSONB metadata and partial expression
+unique index), followed by normal Prisma client generation. This implementation
+does not apply it, contact providers, or change existing data. Review/apply using
+the established operator process before deploying code that reads the new column.
+
 ## Retrieval and bank writes
 
 Each nonempty matrix cell supplies its own title/objective/level query and allowed

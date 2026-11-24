@@ -823,6 +823,7 @@ model LearningDocumentVersion {
   unit_count           Int?
   warnings             Json?
   quality              Json?
+  ocr_request          Json?
   partial_confirmed_at DateTime?
   status               LearningDocumentStatus    @default(UPLOADING)
   error_code           String?

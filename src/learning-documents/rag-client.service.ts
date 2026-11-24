@@ -1,6 +1,7 @@
 import { groundedResponseSchema } from '../question-generation/grounded-generation.contract';
 import {
   outlineSchema,
+  evidenceCheckSchema,
   FrozenPlan,
 } from '../question-generation/knowledge-plan.contract';
 import {
@@ -174,6 +175,40 @@ export class RagClient {
       await this.request('outline', body, 20_000),
     );
     if (!parsed.success || parsed.data.index_id !== body.index_id)
+      throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
+    return parsed.data;
+  }
+  /** Measure how much readable text backs each plan item's source units, without a model call. */
+  async evidenceCheck(body: {
+    owner_id: string;
+    index_id: string;
+    profile_id: string;
+    items: Array<{
+      id: string;
+      source_units: Array<{ kind: string; position: number }>;
+      question_type: QuestionConfig['question_type'];
+      question_format: QuestionConfig['question_format'];
+    }>;
+    ocr_candidate_units?: number[];
+    ocr_pages?: Array<{
+      position: number;
+      status: string;
+      reason?: string | null;
+    }>;
+  }) {
+    const parsed = evidenceCheckSchema.safeParse(
+      await this.request('evidence-check', body, 20_000),
+    );
+    const expected = new Set(body.items.map((item) => item.id));
+    if (
+      !parsed.success ||
+      parsed.data.index_id !== body.index_id ||
+      expected.size !== body.items.length ||
+      parsed.data.items.length !== expected.size ||
+      new Set(parsed.data.items.map((item) => item.id)).size !==
+        expected.size ||
+      parsed.data.items.some((item) => !expected.has(item.id))
+    )
       throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
     return parsed.data;
   }

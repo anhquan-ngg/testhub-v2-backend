@@ -64,7 +64,7 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
   };
   const documents = { source: jest.fn() },
     sources = { prepare: jest.fn() },
-    client = { enabled: true, outline: jest.fn() };
+    client = { enabled: true, outline: jest.fn(), evidenceCheck: jest.fn() };
   beforeEach(async () => {
     jest.resetAllMocks();
     client.enabled = true;
@@ -109,6 +109,15 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
       id: version,
       document_id: document,
       source_sha256: 'a'.repeat(64),
+      quality: {
+        total_units: 2,
+        text_units: 2,
+        ocr_suspected_units: [],
+        blank_units: [],
+        ocr_units: [],
+        ocr_candidate_units: [2],
+        ocr_pages: [{ position: 2, status: 'COMPLETED', reason: null }],
+      },
       document: { topic_id: topic, chapter_id: null, title: 'Book' },
     });
     sources.prepare.mockResolvedValue({
@@ -117,6 +126,21 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
       index: { id: index, profile_id: profile },
     });
     client.outline.mockResolvedValue(map);
+    client.evidenceCheck.mockImplementation(
+      (body: { index_id: string; items: Array<{ id: string }> }) =>
+        Promise.resolve({
+          contract_version: 'knowledge-evidence-check.v1',
+          index_id: body.index_id,
+          items: body.items.map((item) => ({
+            id: item.id,
+            status: 'OK',
+            body_chars: 900,
+            unit_count: 1,
+            substantive_chars: 850,
+            fact_count: 5,
+          })),
+        }),
+    );
     const module = await Test.createTestingModule({
       providers: [
         KnowledgePlanService,
@@ -207,6 +231,87 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     if (plan.matrix) plan.matrix.nodes[0].name = 'Later change';
     expect(result.snapshot.nodes[0].name).toBe('Topic 0');
     expect(repository.edit).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    'NO_TEXT',
+    'THIN_TEXT',
+    'TITLE_ONLY',
+    'OCR_INCOMPLETE',
+    'INSUFFICIENT_DEPTH',
+    'SOURCE_MISSING',
+  ])('blocks approval for every non-OK evidence status: %s', async (status) => {
+    await service.prepareDue();
+    const rowId = plan.matrix?.rows[0].id;
+    client.evidenceCheck.mockResolvedValueOnce({
+      contract_version: 'knowledge-evidence-check.v1',
+      index_id: index,
+      items: [
+        {
+          id: rowId,
+          status,
+          body_chars: 12,
+          unit_count: 1,
+          substantive_chars: 0,
+          fact_count: 0,
+        },
+      ],
+    });
+    await expect(
+      service.approve(owner, id, { revision: 1 }),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'PLAN_EVIDENCE_INSUFFICIENT',
+        details: [
+          expect.objectContaining({ row_id: rowId, status, fact_count: 0 }),
+        ],
+      },
+    });
+    expect(repository.edit).not.toHaveBeenCalled();
+  });
+  it('fails closed when the checker or pinned extraction is unavailable, without changing the plan', async () => {
+    await service.prepareDue();
+    client.evidenceCheck.mockRejectedValueOnce(new Error('down'));
+    await expect(
+      service.approve(owner, id, { revision: 1 }),
+    ).rejects.toMatchObject({
+      response: { code: 'PLAN_EVIDENCE_CHECK_UNAVAILABLE', retryable: true },
+    });
+    documents.source.mockResolvedValueOnce(null);
+    await expect(
+      service.approve(owner, id, { revision: 1 }),
+    ).rejects.toMatchObject({
+      response: { code: 'PLAN_EVIDENCE_CHECK_UNAVAILABLE' },
+    });
+    expect(repository.edit).not.toHaveBeenCalled();
+    expect(plan.revision).toBe(1);
+  });
+  it('checks the highest requested cognition and owned pinned OCR metadata before approval', async () => {
+    await service.prepareDue();
+    if (!plan.matrix) throw new Error('Fixture matrix missing');
+    const row = plan.matrix.rows[0];
+    row.question_type = 'MULTIPLE_CHOICE';
+    row.counts.APPLYING = row.counts.KNOWLEDGE;
+    row.counts.KNOWLEDGE = 0;
+    await service.approve(owner, id, { revision: 1 });
+    expect(documents.source).toHaveBeenLastCalledWith(owner, version);
+    expect(client.evidenceCheck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ocr_candidate_units: [2],
+        ocr_pages: [{ position: 2, status: 'COMPLETED', reason: null }],
+      }),
+    );
+    const [request] = client.evidenceCheck.mock.lastCall as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(request.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: row.id,
+          question_type: 'MULTIPLE_CHOICE',
+          question_format: 'APPLYING',
+        }),
+      ]),
+    );
   });
   const total = (matrix: PlanMatrix | null) =>
     matrix?.rows.reduce(

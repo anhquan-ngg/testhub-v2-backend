@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const RAG_QUEUE = 'ai-document-indexing';
 export const RAG_JOB = 'index-step';
 export const RAG_LEASE_MS = 120_000;
+export const RAG_RATE_LIMIT_RETRY_MS = 60_000;
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 export const ragProfileSchema = z
   .object({

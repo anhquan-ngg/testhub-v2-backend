@@ -24,6 +24,12 @@ citations) is now implemented; see the section below. Text API compatibility rem
   executions retry at most three consecutive times, then FAILED. Explicit retry
   resumes the same index. Revoke sets REVOKED in the document business transaction
   and dispatches a technical tombstone to Python.
+- Retryable `RAG_EMBEDDING_RATE_LIMITED` checkpoints wait at least 60 seconds
+  before redispatch, allowing the AI service's sliding-minute indexing budget
+  to refill. Other transient errors retain exponential backoff. The three-failure
+  cap, ownership fences and saved vector progress remain unchanged; a 503 with
+  this code can be local throttling or an upstream Google limit, not a missing
+  cache migration. Check the persisted `error_code`, not just HTTP access logs.
 - Version + immutable profile is unique; repeated start returns the existing row.
   Source versions and previous profiles are retained.
 
@@ -471,3 +477,70 @@ real SDK HTTP (synthetic vectors/model replies). The backend opt-in DB/Redis sui
 also defines source FK/recovery/edit/approval/commit coverage. Passing mock/HTTP
 checks does not establish live Google grounding quality, S3/CORS, PostgreSQL/Redis
 or browser E2E. Run the opt-in suites and a real consented document demo locally.
+
+
+## 5. Hybrid extraction with selective vision OCR (2026-11-25)
+
+Extraction keeps the text layer and detects thin image-backed candidate units.
+Ordinary upload extraction always sends `ocr_mode=off`, even when the provider is
+enabled. Only a saved-plan lecturer action with explicit consent sends
+`ocr_mode=targeted&ocr_positions=...`; all server-selected PAGE/SLIDE positions
+are eligible, not just globally ranked thin candidates. Enabling the provider is
+not authorization for automatic paid processing.
+
+```dotenv
+# AI service .env (values are your choice; never commit them)
+OCR_ENABLED=true
+OCR_MODEL=<vision-capable 9router model>   # requires ROUTER_BASE_URL / ROUTER_API_KEY
+OCR_MAX_PAGES=30            # render/OCR cap per bounded extraction delivery
+OCR_MAX_CONCURRENCY=3
+OCR_MAX_ATTEMPTS=2          # bounded retries, no unbounded loops
+OCR_TIMEOUT_MS=30000        # per call
+OCR_TIME_BUDGET_MS=35000    # total OCR budget per extraction
+OCR_DAILY_PAGE_LIMIT=0      # 0 = unlimited; set to cap daily spend
+OCR_PERSISTENT_CACHE_ENABLED=true
+OCR_CONFIG_VERSION=v1       # bump to invalidate cached transcripts
+```
+
+Persistent cache (optional, additive migration; stores transcripts, i.e. document content):
+
+```powershell
+Get-Content migrations\004_ocr_page_cache.sql | docker exec -i testhub_db psql -U testhub_ai -d testhub -v ON_ERROR_STOP=1
+```
+
+Deploy the AI service and backend `document-worker`/`api` after reviewing the
+additive backend `20261125120000_document_plan_ocr` migration. No existing version
+is automatically re-extracted. Explicit recovery creates a NEW immutable version
+with a new artifact/index. See [plan OCR recovery](knowledge-plans.md#explicit-ocr-recovery-from-a-saved-plan)
+for initial/retry endpoints, consent, saved revision replay and operator rollout.
+
+Each delivery sends <=30 positions, saves a fenced checkpoint, and preserves prior
+successful transcripts. Only progressing PAGE_LIMIT leftovers continue
+(up to500 deliveries); daily/time/provider/cache failures and expired leases finish
+with explicit INCOMPLETE progress rather than blind paid retries. Explicit retry
+also creates a new child. Polling GET never authorizes OCR. The teacher explicitly
+creates a NEW plan from the usable recovered version (confirming PARTIAL if needed);
+existing plans and failed batches are not redirected or automatically rerun.
+
+`quality.ocr_units` lists successfully ADDED transcripts; `ocr_candidate_units`
+retains detected candidates and `ocr_pages` reports PENDING, COMPLETED, NO_TEXT,
+FAILED, BUDGET_EXHAUSTED or DISABLED with bounded optional nullable reasons.
+Unresolved selected pages cannot publish EXTRACTED. Transcripts must not infer
+missing diagram content. Before production enablement, separately approve a real
+image test to confirm provider image forwarding; this task made no live OCR calls.
+
+## 6. Plan scope expansion and evidence pre-check (2026-11-25)
+
+- **TOC expansion:** items pointing only at thin pages (< 150 body chars) are widened to
+  nearby content pages (forward 4, backward 12, at most 12 units) and the plan warning
+  `TOC_SCOPE_EXPANDED` is added. Regenerate older plans to apply it.
+- **Evidence pre-check:** `POST /internal/rag/evidence-check` inspects selected source
+  evidence locally and returns `OK`, `THIN_TEXT`, `NO_TEXT`, `TITLE_ONLY`,
+  `OCR_INCOMPLETE`, `INSUFFICIENT_DEPTH` or `SOURCE_MISSING` for each row. Any non-OK
+  row blocks approval with `409 PLAN_EVIDENCE_INSUFFICIENT`; unavailable/invalid
+  checks block with `503 PLAN_EVIDENCE_CHECK_UNAVAILABLE`, not a source-insufficient
+  claim. Results include `body_chars`, `unit_count`, `substantive_chars` and
+  `fact_count`. Passing the local factual heuristic does not guarantee that later
+  generation can satisfy the requested semantic depth or question count.
+- **Prompt:** each slot includes `question_format` and `cognitive_task`.
+- **Dependency:** `tzdata` in `requirements.txt`; rebuild the AI image.

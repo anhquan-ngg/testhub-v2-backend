@@ -134,6 +134,35 @@ export const outlineSchema = z
   })
   .strict();
 export type ContentMap = z.infer<typeof outlineSchema>;
+export const evidenceCheckSchema = z
+  .object({
+    contract_version: z.literal('knowledge-evidence-check.v1'),
+    index_id: z.string().uuid(),
+    items: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            status: z.enum([
+              'OK',
+              'THIN_TEXT',
+              'NO_TEXT',
+              'TITLE_ONLY',
+              'OCR_INCOMPLETE',
+              'INSUFFICIENT_DEPTH',
+              'SOURCE_MISSING',
+            ]),
+            body_chars: z.number().int().min(0),
+            unit_count: z.number().int().min(0),
+            substantive_chars: z.number().int().min(0),
+            fact_count: z.number().int().min(0),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+export type EvidenceCheck = z.infer<typeof evidenceCheckSchema>;
 export const frozenPlanItemSchema = z
   .object({
     id: z.string().min(1).max(100),

@@ -134,6 +134,33 @@ describe('RAG checkpoint execution', () => {
     expect(client.prepare).not.toHaveBeenCalled();
     expect(repo.finish).not.toHaveBeenCalled();
   });
+  it.each([0, 1, 2])(
+    'waits a full rate-limit window without changing the failure cap (prior failures: %i)',
+    async (priorFailures) => {
+      const now = 1_800_000_000_000;
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+      row.failure_count = priorFailures;
+      client.step.mockRejectedValue(
+        new DocumentProcessingError('RAG_EMBEDDING_RATE_LIMITED', true),
+      );
+      try {
+        await execution.process('index');
+        expect(repo.finish).toHaveBeenLastCalledWith(
+          'index',
+          expect.any(String),
+          'owner',
+          expect.objectContaining({
+            status: priorFailures < 2 ? 'QUEUED' : 'FAILED',
+            failure_count: priorFailures + 1,
+            error_code: 'RAG_EMBEDDING_RATE_LIMITED',
+            next_dispatch_at: new Date(now + 60_000),
+          }),
+        );
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
   it('caps consecutive transient failures and never retries permanent errors', async () => {
     client.step.mockRejectedValue(
       new DocumentProcessingError('RAG_EMBEDDING_UNAVAILABLE', true),
