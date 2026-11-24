@@ -167,7 +167,9 @@ export class DocumentGenerationService {
                     'RAG_INSUFFICIENT_CONTEXT',
                   ].includes(error.code)
                 ? 'AI_INSUFFICIENT_EVIDENCE'
-                : 'AI_SERVICE_FAILED',
+                : error.code === 'RAG_EMBEDDING_QUOTA_EXHAUSTED'
+                  ? 'AI_EMBEDDING_QUOTA_EXHAUSTED'
+                  : 'AI_SERVICE_FAILED',
           HttpStatus.BAD_GATEWAY,
           'Document generation failed',
           error.code === 'RAG_INSUFFICIENT_EVIDENCE'

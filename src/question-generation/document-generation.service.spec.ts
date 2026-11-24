@@ -128,6 +128,7 @@ describe('Document generation authorization and preparation', () => {
     ['RAG_DEADLINE', 'AI_SERVICE_TIMEOUT'],
     ['RAG_GENERATION_TIMEOUT', 'AI_SERVICE_TIMEOUT'],
     ['RAG_SERVICE_FAILED', 'AI_SERVICE_FAILED'],
+    ['RAG_EMBEDDING_QUOTA_EXHAUSTED', 'AI_EMBEDDING_QUOTA_EXHAUSTED'],
   ])(
     'maps %s to %s without changing gateway status or invoking again',
     async (upstream, code) => {

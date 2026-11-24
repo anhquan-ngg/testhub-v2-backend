@@ -24,6 +24,7 @@ export type GenerationErrorCode =
   | 'AI_SERVICE_FAILED'
   | 'AI_PROVIDER_FAILED'
   | 'AI_OUTPUT_INVALID'
+  | 'AI_EMBEDDING_QUOTA_EXHAUSTED'
   | 'AI_INSUFFICIENT_EVIDENCE';
 
 /**

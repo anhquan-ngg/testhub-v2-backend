@@ -84,6 +84,7 @@
   expires after 20 minutes; never retry ambiguous LLM calls automatically. The only
   retry is the fenced requeue (AI_GENERATION_MAX_RETRIES) for allow-listed pre-LLM
   retryable codes in document mode; keep RAG_DEADLINE out of the allow-list.
+  RAG_EMBEDDING_QUOTA_EXHAUSTED maps to AI_EMBEDDING_QUOTA_EXHAUSTED (502, non-retryable).
 - Migration 20261023090000_add_document_question_generation adds source FKs and
   nullable item provenance. It was generated offline, not applied to user DB.
 - DocumentGenerationService authorizes sources before/after internal generation.
