@@ -7,6 +7,11 @@ import { DocumentRepository } from '../learning-documents/document.repository';
 import { DocumentGenerationService } from './document-generation.service';
 import { RagClient } from '../learning-documents/rag-client.service';
 import type { ContentMap, PlanMatrix } from './knowledge-plan.contract';
+import {
+  observePlanSource,
+  planSourceTimeout,
+  PlanSourceState,
+} from './knowledge-plan-progress';
 
 describe('Knowledge plan source preparation and explicit confirmation', () => {
   const owner = randomUUID(),
@@ -44,6 +49,9 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     topic_id: string;
     source_version_id: string;
     created_at: Date;
+    preparation_started_at: Date;
+    source_progress_at: Date;
+    source_checkpoint: unknown;
     status: string;
     revision: number;
     question_configs: object[];
@@ -61,9 +69,10 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     edit: jest.fn(),
     create: jest.fn(),
     retry: jest.fn(),
+    checkpoint: jest.fn(),
   };
   const documents = { source: jest.fn() },
-    sources = { prepare: jest.fn() },
+    sources = { prepare: jest.fn(), inspect: jest.fn() },
     client = { enabled: true, outline: jest.fn(), evidenceCheck: jest.fn() };
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -74,6 +83,9 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
       topic_id: topic,
       source_version_id: version,
       created_at: new Date(),
+      preparation_started_at: new Date(),
+      source_progress_at: new Date(),
+      source_checkpoint: null,
       status: 'WAITING_SOURCE',
       revision: 1,
       question_configs: [
@@ -91,6 +103,29 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     repository.owned.mockImplementation(() => Promise.resolve(plan));
     repository.get.mockImplementation(() => Promise.resolve(plan));
     repository.matches.mockResolvedValue([]);
+    repository.checkpoint.mockImplementation(
+      (_owner, _id, _token, state?: PlanSourceState) => {
+        const observed = state
+          ? observePlanSource(plan.source_checkpoint, state)
+          : null;
+        const now = new Date(Date.now());
+        const progressAt = observed?.advanced ? now : plan.source_progress_at;
+        const code = planSourceTimeout({
+          ...plan,
+          source_progress_at: progressAt,
+        });
+        if (code) {
+          plan.status = 'FAILED';
+          plan.error_code = code;
+          return Promise.resolve(false);
+        }
+        if (observed) {
+          plan.source_checkpoint = observed.checkpoint;
+          plan.source_progress_at = progressAt;
+        }
+        return Promise.resolve(true);
+      },
+    );
     repository.finish.mockImplementation(
       (_id, _token, _owner, data: object) => {
         Object.assign(plan, data);
@@ -120,11 +155,20 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
       },
       document: { topic_id: topic, chapter_id: null, title: 'Book' },
     });
-    sources.prepare.mockResolvedValue({
+    const readyState = {
       ready: true,
       stage: 'READY',
-      index: { id: index, profile_id: profile },
-    });
+      index: {
+        id: index,
+        profile_id: profile,
+        status: 'READY',
+        completed_chunks: 10,
+        chunk_count: 10,
+        error_code: null,
+      },
+    };
+    sources.inspect.mockResolvedValue(readyState);
+    sources.prepare.mockResolvedValue(readyState);
     client.outline.mockResolvedValue(map);
     client.evidenceCheck.mockImplementation(
       (body: { index_id: string; items: Array<{ id: string }> }) =>
@@ -419,6 +463,31 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
     expect(plan.status).toBe('FAILED');
     expect(plan.matrix).toBeNull();
   });
+  it('rejects an outline from a different index even for the same immutable source', async () => {
+    client.outline.mockResolvedValue({ ...map, index_id: randomUUID() });
+    await service.prepareDue();
+    expect(plan.status).toBe('FAILED');
+    expect(plan.matrix).toBeNull();
+  });
+  it('releases preparation when the authorized index stops being ready during outlining', async () => {
+    client.outline.mockImplementation(() => {
+      sources.inspect.mockResolvedValue({
+        ready: false,
+        stage: 'INDEXING',
+        index: {
+          id: index,
+          profile_id: profile,
+          status: 'QUEUED',
+          completed_chunks: 16,
+          chunk_count: 349,
+        },
+      });
+      return Promise.resolve(map);
+    });
+    await service.prepareDue();
+    expect(plan.status).toBe('WAITING_SOURCE');
+    expect(plan.matrix).toBeNull();
+  });
   it('disambiguates duplicate sibling names instead of failing the plan', async () => {
     client.outline.mockResolvedValue({
       ...map,
@@ -455,5 +524,97 @@ describe('Knowledge plan source preparation and explicit confirmation', () => {
       'PLAN_NOT_RETRYABLE',
     );
     expect(repository.retry).toHaveBeenCalledTimes(1);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  function waitingIndex(completed = 16) {
+    const state = {
+      ready: false,
+      stage: 'INDEXING' as const,
+      index: {
+        id: index,
+        profile_id: profile,
+        status: 'QUEUED',
+        completed_chunks: completed,
+        chunk_count: 500,
+        error_code: null,
+      },
+    };
+    sources.inspect.mockResolvedValue(state);
+    sources.prepare.mockResolvedValue(state);
+    return state;
+  }
+
+  it('survives more than twenty total minutes while completed chunks measurably increase', async () => {
+    let time = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => time);
+    waitingIndex(16);
+    await service.prepareDue();
+    for (const completed of [32, 48, 64]) {
+      time += 10 * 60_000;
+      waitingIndex(completed);
+      await service.prepareDue();
+      expect(plan.status).toBe('WAITING_SOURCE');
+    }
+    expect(plan.source_progress_at.getTime()).toBe(time);
+    expect(client.outline).not.toHaveBeenCalled();
+  });
+
+  it('fails after twenty minutes without measurable progress despite successful polls and retries', async () => {
+    let time = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => time);
+    const state = waitingIndex();
+    await service.prepareDue();
+    const lastProgress = plan.source_progress_at.getTime();
+    for (let minute = 1; minute <= 19; minute++) {
+      time += 60_000;
+      state.index.error_code = null;
+      await service.prepareDue();
+    }
+    expect(plan.source_progress_at.getTime()).toBe(lastProgress);
+    sources.prepare.mockRejectedValue(new ServiceUnavailableException('retry'));
+    sources.inspect.mockRejectedValue(new ServiceUnavailableException('retry'));
+    time += 60_000;
+    await service.prepareDue();
+    expect(plan.error_code).toBe('PLAN_SOURCE_TIMEOUT');
+    expect(client.outline).not.toHaveBeenCalled();
+  });
+
+  it('enforces sixty minutes even when the index is still advancing or dependencies keep failing', async () => {
+    let time = Date.now();
+    jest.spyOn(Date, 'now').mockImplementation(() => time);
+    for (let minute = 0; minute <= 60; minute += 10) {
+      waitingIndex(minute + 1);
+      await service.prepareDue();
+      if (minute < 60) time += 10 * 60_000;
+    }
+    expect(plan.status).toBe('FAILED');
+    expect(plan.error_code).toBe('PLAN_SOURCE_TOTAL_TIMEOUT');
+    sources.inspect.mockRejectedValue(
+      new ServiceUnavailableException('outage'),
+    );
+    await service.prepareDue();
+    expect(plan.error_code).toBe('PLAN_SOURCE_TOTAL_TIMEOUT');
+  });
+
+  it('checks the hard cap again after a successful outline and never publishes late results', async () => {
+    let time = Date.now();
+    plan.preparation_started_at = new Date(time - 59 * 60_000);
+    jest.spyOn(Date, 'now').mockImplementation(() => time);
+    client.outline.mockImplementation(() => {
+      time += 2 * 60_000;
+      return Promise.resolve(map);
+    });
+    await service.prepareDue();
+    expect(plan.error_code).toBe('PLAN_SOURCE_TOTAL_TIMEOUT');
+    expect(plan.matrix).toBeNull();
+  });
+
+  it('does not start preparation when a durable execution checkpoint rejects the worker', async () => {
+    repository.checkpoint.mockResolvedValue(false);
+    await service.prepareDue();
+    expect(sources.prepare).not.toHaveBeenCalled();
+    expect(client.outline).not.toHaveBeenCalled();
+    expect(repository.finish).not.toHaveBeenCalled();
   });
 });

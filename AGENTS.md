@@ -43,6 +43,12 @@
 - Keep `ocr_request` checkpoints durable, merge earlier added transcripts and fence every artifact/publication against current execution/lease/ownership. <=30 positions per call, <=500 deliveries; only progressing PAGE_LIMIT continuation is automatic. Other failures and expired leases must finish INCOMPLETE without paid retry.
 - GET owned version metadata exposes progress, never private object keys/leases. A recovered source requires an explicit NEW plan/index; never replay failed generation automatically. The additive OCR migration is offline only until an operator applies it.
 
+## Durable plan preparation (2026-11-25)
+
+- Knowledge plans use a persisted measurable-source-progress checkpoint: idle cap 20 minutes (`PLAN_SOURCE_TIMEOUT`), hard window cap 60 minutes (`PLAN_SOURCE_TOTAL_TIMEOUT`). Only usable extraction, first authorized pin, completed-chunk high-water increase and READY count; retries, leases, polling and updated_at never count. Fence observations/publication by owner, execution token and live lease. Explicit failed retry renews clocks, not created_at.
+- Equivalent active WAITING_SOURCE/PREPARING creation resumes the same owner/topic/immutable version/exact ordered normalized configs. Serialize by source transaction advisory lock and persist owner/key aliases; same-key payload conflicts and terminal original-plan replays must remain intact. Return reused boolean.
+- Owned detail source_progress reads actual pinned counters without side effects or private IDs/keys/leases; floor/clamp percent, null for unknown denominator. See docs/knowledge-plans.md for the exact contract, conservative legacy baseline and offline additive migration 20261125130000_plan_preparation_progress. Never auto-apply it.
+
 ## Knowledge plans (2026-10-25)
 
 - Lecturer generation starts with a subject-owned document, not a bank chapter.

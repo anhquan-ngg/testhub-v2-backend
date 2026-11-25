@@ -866,7 +866,11 @@ model KnowledgePlan {
   execution_id      String?                   @db.Uuid
   lease_expires_at  DateTime?
   next_prepare_at   DateTime                  @default(now())
+  preparation_started_at DateTime              @default(now())
+  source_progress_at DateTime                  @default(now())
+  source_checkpoint Json?
   error_code        String?
+  requestKeys       KnowledgePlanRequestKey[]
   creator           User                      @relation(fields: [created_by], references: [id], onDelete: Cascade)
   topic             Topic                     @relation(fields: [topic_id], references: [id], onDelete: Cascade)
   sourceVersion     LearningDocumentVersion   @relation(fields: [source_version_id], references: [id], onDelete: NoAction)
@@ -877,6 +881,18 @@ model KnowledgePlan {
   @@index([status, next_prepare_at])
   @@index([source_version_id])
   @@map("knowledge_plans")
+}
+
+model KnowledgePlanRequestKey {
+  created_by String @db.Uuid
+  key String
+  request_hash String @db.Char(64)
+  plan_id String @db.Uuid
+  plan KnowledgePlan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+
+  @@id([created_by, key])
+  @@index([plan_id])
+  @@map("knowledge_plan_request_keys")
 }
 
 enum LearningDocumentIndexStatus {

@@ -345,20 +345,13 @@ export class KnowledgePlanService {
           candidate.created_by,
           candidate.id,
         );
-        if (Date.now() - plan.created_at.getTime() > 20 * 60_000) {
-          await this.repository.finish(plan.id, token, plan.created_by, {
-            status: 'FAILED',
-            error_code: 'PLAN_SOURCE_TIMEOUT',
-          });
-          continue;
-        }
         const source = await this.documents.source(
           plan.created_by,
           plan.source_version_id,
         );
         if (!source || source.document.topic_id !== plan.topic_id)
           throw new NotFoundException('Source unavailable');
-        const state = await this.sources.prepare({
+        const input = {
           created_by: plan.created_by,
           topic_id: plan.topic_id,
           chapter_id: source.document.chapter_id,
@@ -366,7 +359,27 @@ export class KnowledgePlanService {
           source_index_id: plan.source_index_id,
           source_profile_id: plan.source_profile_id,
           source_query: '',
-        });
+        };
+        const observed = await this.sources.inspect(input);
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            observed,
+          ))
+        )
+          continue;
+        const state = await this.sources.prepare(input);
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            state,
+          ))
+        )
+          continue;
         if (!state.ready || !state.index) {
           await this.repository.finish(plan.id, token, plan.created_by, {
             status: 'WAITING_SOURCE',
@@ -386,6 +399,7 @@ export class KnowledgePlanService {
           title: source.document.title,
         });
         if (
+          raw.index_id !== state.index.id ||
           raw.version_id !== source.id ||
           raw.document_id !== source.document_id ||
           raw.source_sha256 !== source.source_sha256
@@ -398,6 +412,26 @@ export class KnowledgePlanService {
         };
         const configs = questionConfigsSchema.parse(plan.question_configs);
         const matrix = buildMatrix(map.nodes, configs);
+        const current = await this.sources.inspect({
+          ...input,
+          source_index_id: state.index.id,
+          source_profile_id: state.index.profile_id,
+        });
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            current,
+          ))
+        )
+          continue;
+        if (!current.ready) {
+          await this.repository.finish(plan.id, token, plan.created_by, {
+            status: 'WAITING_SOURCE',
+          });
+          continue;
+        }
         await this.repository.finish(plan.id, token, plan.created_by, {
           status: 'REVIEW_REQUIRED',
           content_map: map,
@@ -407,6 +441,14 @@ export class KnowledgePlanService {
           source_profile_id: state.index.profile_id,
         });
       } catch (error) {
+        if (
+          !(await this.repository.checkpoint(
+            candidate.created_by,
+            candidate.id,
+            token,
+          ))
+        )
+          continue;
         const retry =
           (error instanceof DocumentProcessingError && error.retryable) ||
           (error instanceof HttpException &&

@@ -68,6 +68,82 @@ reload the saved plan before retrying. Plan creation and batch submission are
 idempotent for the same owner/key and payload. Reusing a key for other input is a
 conflict. Uploaded reservations remain only in memory, not browser storage/URLs.
 
+## Durable preparation progress and equivalent resume
+
+Plan preparation allows **20 minutes without observed measurable source progress**,
+with a **hard total cap of 60 minutes** per preparation window. Extraction becoming
+usable, the first authorized index/profile pin, an increased completed-chunk
+high-water mark, or the index becoming READY advances the durable progress clock.
+Polling, retries, rate-limit errors, lease recovery, status churn and `updated_at`
+do not advance it. A fresh worker resumes the persisted checkpoint rather than
+starting a fresh window. Both deadlines are checked before preparation, after
+outline I/O and on retryable failures. Idle failure uses `PLAN_SOURCE_TIMEOUT`;
+the hard cap uses `PLAN_SOURCE_TOTAL_TIMEOUT`, with total-cap precedence.
+Explicit `POST /question-generation-plans/:id/retry` for an eligible FAILED plan
+renews both clocks and clears the observation baseline, retaining the original
+creation timestamp, immutable source, existing index/profile and idempotency keys.
+
+Owned detail GET adds `source_progress`, either null or:
+
+```typescript
+{
+  stage: 'EXTRACTING' | 'INDEXING' | 'OUTLINING';
+  completed_chunks: number;
+  total_chunks: number;
+  percent: number | null;
+  index_status: string | null;
+  error_code: string | null;
+}
+```
+
+The summary reads current counters from the exact authorized pinned index even
+while the plan remains WAITING_SOURCE. Percent is floored and clamped to 0..100;
+a zero/unknown denominator yields null, never a fabricated 0/0 completion. A READY
+index is OUTLINING. Unpinned usable sources are INDEXING with zero counters and
+null percent. Unusable sources are EXTRACTING. Missing/revoked/foreign pinned
+indexes and plans outside WAITING_SOURCE/PREPARING/FAILED return null. The error is
+the current index error, otherwise the source extraction error. This field exposes
+no profile/index IDs, storage keys, execution tokens or leases. GET performs no
+writes, preparation, index starts or retries.
+
+Creating an equivalent active plan returns the existing plan with `reused: true`.
+Equivalence requires the same owner, topic, immutable source version and exact
+normalized **ordered** question configs. Different config order/content creates
+a different plan. Failed/review/approved or foreign plans are not candidates.
+An owner/source-scoped PostgreSQL transaction advisory lock serializes concurrent
+creates. Durable owner/key aliases bind every admitted key to its original plan:
+same-key/same-hash replay still returns that plan after it becomes terminal;
+same-key/different-hash remains a conflict. A genuinely new plan returns
+`reused: false`. Ordinary polling never creates a plan.
+
+### Preparation migration rollout
+
+Additive migration `20261125130000_plan_preparation_progress` adds preparation
+start/progress clocks, JSONB observation checkpoints and the owner-scoped request
+key alias table. It backfills original keys. Legacy plans conservatively retain
+their original creation time for both clocks and a baseline of their existing
+source/index state; deployment itself does not count as progress or renew a
+window. Old overdue plans may fail immediately and require explicit retry.
+
+Operator commands from this backend directory, using the established deployment
+environment (these commands were **not** executed against a database here):
+
+```powershell
+npx --no-install prisma migrate deploy
+npx --no-install prisma generate
+npm run build
+```
+
+Apply pending migrations and regenerate the client before deploying the updated
+API/AI worker, then deploy frontend. No new environment variable is required.
+This change does not apply migrations or restart workers. Offline client setup
+and schema validation, without loading `.env` or connecting to a database:
+
+```powershell
+npx --no-install prisma generate --config src\auth\testing\prisma-fixture.config.ts
+npx --no-install prisma validate --config src\auth\testing\prisma-fixture.config.ts
+```
+
 ## Explicit OCR recovery from a saved plan
 
 Ordinary upload extraction explicitly sends `ocr_mode=off`; detecting thin or
