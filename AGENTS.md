@@ -36,6 +36,19 @@
 - npm run test:dev-runner uses real PM2/Nest with synthetic apps in an isolated temp project, never user DB/Redis/AI.
 
 
+## Explicit saved-plan OCR recovery
+
+- Ordinary document extraction must send `ocr_mode=off`. Only explicit owned lecturer consent on a saved plan revision may admit targeted OCR; browser positions/source keys are forbidden.
+- POST plan `:id/ocr` and `:id/ocr/retry` create immutable document versions. Use the owner/plan transaction locks and JSON expression unique index; do not mutate the original extraction, plan or batch. See docs/knowledge-plans.md for exact bodies and replay identity.
+- Keep `ocr_request` checkpoints durable, merge earlier added transcripts and fence every artifact/publication against current execution/lease/ownership. <=30 positions per call, <=500 deliveries; only progressing PAGE_LIMIT continuation is automatic. Other failures and expired leases must finish INCOMPLETE without paid retry.
+- GET owned version metadata exposes progress, never private object keys/leases. A recovered source requires an explicit NEW plan/index; never replay failed generation automatically. The additive OCR migration is offline only until an operator applies it.
+
+## Durable plan preparation (2026-11-25)
+
+- Knowledge plans use a persisted measurable-source-progress checkpoint: idle cap 20 minutes (`PLAN_SOURCE_TIMEOUT`), hard window cap 60 minutes (`PLAN_SOURCE_TOTAL_TIMEOUT`). Only usable extraction, first authorized pin, completed-chunk high-water increase and READY count; retries, leases, polling and updated_at never count. Fence observations/publication by owner, execution token and live lease. Explicit failed retry renews clocks, not created_at.
+- Equivalent active WAITING_SOURCE/PREPARING creation resumes the same owner/topic/immutable version/exact ordered normalized configs. Serialize by source transaction advisory lock and persist owner/key aliases; same-key payload conflicts and terminal original-plan replays must remain intact. Return reused boolean.
+- Owned detail source_progress reads actual pinned counters without side effects or private IDs/keys/leases; floor/clamp percent, null for unknown denominator. See docs/knowledge-plans.md for the exact contract, conservative legacy baseline and offline additive migration 20261125130000_plan_preparation_progress. Never auto-apply it.
+
 ## Knowledge plans (2026-10-25)
 
 - Lecturer generation starts with a subject-owned document, not a bank chapter.
@@ -81,7 +94,10 @@
 - WAITING_SOURCE and preparation_stage track extraction/indexing without an LLM
   attempt. The AI worker pins one index/profile and promotes only READY sources.
   The separate document worker still owns extraction/index checkpoints. Preparation
-  expires after 20 minutes; never retry ambiguous LLM calls automatically.
+  expires after 20 minutes; never retry ambiguous LLM calls automatically. The only
+  retry is the fenced requeue (AI_GENERATION_MAX_RETRIES) for allow-listed pre-LLM
+  retryable codes in document mode; keep RAG_DEADLINE out of the allow-list.
+  RAG_EMBEDDING_QUOTA_EXHAUSTED maps to AI_EMBEDDING_QUOTA_EXHAUSTED (502, non-retryable).
 - Migration 20261023090000_add_document_question_generation adds source FKs and
   nullable item provenance. It was generated offline, not applied to user DB.
 - DocumentGenerationService authorizes sources before/after internal generation.
@@ -120,7 +136,8 @@
   never process a mutable upload key. Require explicit consent and notes opt-in.
 - `npm run start:document-worker` owns separate `ai-document-processing` jobs.
   Queued versions form a durable outbox. Fence claims/results by execution UUID,
-  lease and current ownership. No paid calls occur in extraction.
+  lease and current ownership. Ordinary extraction disables paid OCR; explicit
+  plan-targeted OCR uses separate durable consent/checkpoint metadata.
 - Only Python extracts PDF/PPTX; send bounded bytes, never an arbitrary URL.
   Preserve source hash and PAGE/SLIDE/NOTES. EXTRACTED/OCR_REQUIRED are not a RAG index.
 - Block `learning-documents/` keys in legacy `/s3/*` routes and root listings;

@@ -2,6 +2,8 @@ import {
   CreateKnowledgePlanDto,
   EditKnowledgePlanDto,
   PlanRevisionDto,
+  PlanOcrDto,
+  RetryPlanOcrDto,
   RebuildMatrixDto,
 } from './dto/knowledge-plan.dto';
 import {
@@ -45,7 +47,7 @@ type LecturerRequest = Request & { user: GenerationActor };
 @UseGuards(JwtGuard, RolesGuard)
 @Roles(UserRole.LECTURER)
 @UseFilters(DocumentErrorFilter)
-@Controller('question-generation-plans')
+@Controller(['question-generation-plans', 'knowledge-plans'])
 export class KnowledgePlanController {
   constructor(
     private readonly plans: KnowledgePlanService,
@@ -145,6 +147,53 @@ export class KnowledgePlanController {
     @Body() input: unknown,
   ) {
     return this.plans.approve(req.user.id, id, input);
+  }
+
+  @Post(':id/ocr')
+  @HttpCode(202)
+  @ApiBody({ type: PlanOcrDto })
+  @ApiOperation({
+    summary:
+      'Explicitly supplement saved plan pages in a new immutable source version',
+  })
+  @ApiResponse({
+    status: 202,
+    description:
+      '{version_id}; repeated plan revision returns the same version',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Plan revision changed or source unavailable',
+  })
+  requestOcr(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() input: unknown,
+  ) {
+    return this.plans.requestOcr(req.user.id, id, input);
+  }
+
+  @Post(':id/ocr/retry')
+  @HttpCode(202)
+  @ApiBody({ type: RetryPlanOcrDto })
+  @ApiOperation({
+    summary:
+      'Explicitly retry unresolved OCR pages in another immutable child version',
+  })
+  @ApiResponse({
+    status: 202,
+    description: '{version_id}; idempotent per failed child version',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'OCR child not retryable or plan revision changed',
+  })
+  retryOcr(
+    @Req() req: LecturerRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() input: unknown,
+  ) {
+    return this.plans.retryOcr(req.user.id, id, input);
   }
 
   @Post(':id/retry')

@@ -120,6 +120,37 @@ describe('Document generation authorization and preparation', () => {
     expect((await service.prepare(input)).ready).toBe(true);
     expect(rag.start).not.toHaveBeenCalled();
   });
+  it('inspects live pinned counters without starting work, including retryable index failures', async () => {
+    expect(await service.inspect({ ...input, source_index_id: null })).toEqual({
+      ready: false,
+      stage: 'INDEXING',
+      index: null,
+    });
+    indexes.forVersion.mockResolvedValue({
+      ...index,
+      status: 'FAILED',
+      completed_chunks: 176,
+      chunk_count: 349,
+    });
+    expect(await service.inspect(input)).toMatchObject({
+      ready: false,
+      stage: 'INDEXING',
+      index: { completed_chunks: 176, chunk_count: 349 },
+    });
+    expect(rag.start).not.toHaveBeenCalled();
+    expect(client.generate).not.toHaveBeenCalled();
+  });
+  it.each(['inspect', 'prepare'] as const)(
+    'rejects a changed pinned profile in %s before any job or model call',
+    async (method) => {
+      indexes.forVersion.mockResolvedValue({ ...index, profile_id: 'other' });
+      await expect(service[method](input)).rejects.toMatchObject({
+        code: 'AI_DOCUMENT_SOURCE_INVALID',
+      });
+      expect(rag.start).not.toHaveBeenCalled();
+      expect(client.generate).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     ['RAG_INSUFFICIENT_EVIDENCE', 'AI_INSUFFICIENT_EVIDENCE'],
     ['RAG_PLAN_ITEM_INSUFFICIENT_CONTEXT', 'AI_INSUFFICIENT_EVIDENCE'],
@@ -128,6 +159,7 @@ describe('Document generation authorization and preparation', () => {
     ['RAG_DEADLINE', 'AI_SERVICE_TIMEOUT'],
     ['RAG_GENERATION_TIMEOUT', 'AI_SERVICE_TIMEOUT'],
     ['RAG_SERVICE_FAILED', 'AI_SERVICE_FAILED'],
+    ['RAG_EMBEDDING_QUOTA_EXHAUSTED', 'AI_EMBEDDING_QUOTA_EXHAUSTED'],
   ])(
     'maps %s to %s without changing gateway status or invoking again',
     async (upstream, code) => {
@@ -142,6 +174,20 @@ describe('Document generation authorization and preparation', () => {
         status: 502,
         evidenceDetails:
           upstream === 'RAG_INSUFFICIENT_EVIDENCE' ? details : undefined,
+      });
+      expect(client.generate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([true, false])(
+    'preserves the upstream storage retry phase guarantee (%s)',
+    async (retryable) => {
+      client.generate.mockRejectedValue(
+        new DocumentProcessingError('RAG_STORAGE_UNAVAILABLE', retryable),
+      );
+      await expect(service.generate(input, 'Data')).rejects.toMatchObject({
+        code: 'AI_SERVICE_FAILED',
+        retryable,
       });
       expect(client.generate).toHaveBeenCalledTimes(1);
     },

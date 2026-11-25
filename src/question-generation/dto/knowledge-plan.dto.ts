@@ -88,6 +88,14 @@ export class PlanMatrixDto {
 export class PlanRevisionDto {
   @ApiProperty({ minimum: 1 }) @IsInt() @Min(1) revision: number;
 }
+export class PlanOcrDto extends PlanRevisionDto {
+  @ApiProperty({ enum: [true] })
+  @Equals(true)
+  consent: boolean;
+}
+export class RetryPlanOcrDto extends PlanOcrDto {
+  @ApiProperty({ format: 'uuid' }) @IsUUID() version_id: string;
+}
 export class EditKnowledgePlanDto extends PlanRevisionDto {
   @ApiProperty({ type: PlanMatrixDto })
   @ValidateNested()

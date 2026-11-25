@@ -89,6 +89,33 @@ export class DocumentGenerationService {
     if (source.status === 'FAILED') this.fail('AI_DOCUMENT_FAILED');
     return source;
   }
+  /** Inspect authorized preparation without starting an index or refreshing any progress clock. */
+  async inspect(input: SourceInput) {
+    this.enabled();
+    const source = await this.source(input);
+    if (!isUsableSource(source.status, source.partial_confirmed_at))
+      return { ready: false, stage: 'EXTRACTING' as const, index: null };
+    const index = input.source_index_id
+      ? await this.indexes.forVersion(
+          input.created_by,
+          input.source_index_id,
+          source.id,
+        )
+      : null;
+    if (
+      input.source_index_id &&
+      (!index ||
+        index.status === 'REVOKED' ||
+        index.profile_id !== input.source_profile_id)
+    )
+      this.fail('AI_DOCUMENT_SOURCE_INVALID');
+    return {
+      ready: index?.status === 'READY',
+      stage:
+        index?.status === 'READY' ? ('READY' as const) : ('INDEXING' as const),
+      index,
+    };
+  }
   /** Queue indexing exactly once, then resolve the same pinned profile across worker restarts. */
   async prepare(input: SourceInput) {
     this.enabled();
@@ -102,7 +129,11 @@ export class DocumentGenerationService {
           source.id,
         )
       : await this.rag.start(input.created_by, source.document_id, source.id);
-    if (!index || index.status === 'REVOKED')
+    if (
+      !index ||
+      index.status === 'REVOKED' ||
+      (input.source_index_id && index.profile_id !== input.source_profile_id)
+    )
       this.fail('AI_DOCUMENT_SOURCE_INVALID');
     if (index.status === 'FAILED') this.fail('AI_INDEX_FAILED');
     return {
@@ -167,7 +198,9 @@ export class DocumentGenerationService {
                     'RAG_INSUFFICIENT_CONTEXT',
                   ].includes(error.code)
                 ? 'AI_INSUFFICIENT_EVIDENCE'
-                : 'AI_SERVICE_FAILED',
+                : error.code === 'RAG_EMBEDDING_QUOTA_EXHAUSTED'
+                  ? 'AI_EMBEDDING_QUOTA_EXHAUSTED'
+                  : 'AI_SERVICE_FAILED',
           HttpStatus.BAD_GATEWAY,
           'Document generation failed',
           error.code === 'RAG_INSUFFICIENT_EVIDENCE'

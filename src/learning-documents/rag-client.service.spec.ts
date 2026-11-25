@@ -127,6 +127,78 @@ describe('RAG generation failure diagnostics', () => {
     });
   });
 
+  const checkBody = {
+    owner_id: '10000000-0000-4000-8000-000000000001',
+    index_id: '10000000-0000-4000-8000-000000000002',
+    profile_id: 'b'.repeat(64),
+    items: [
+      {
+        id: 'row',
+        source_units: [{ kind: 'PAGE', position: 7 }],
+        question_type: 'MULTIPLE_CHOICE' as const,
+        question_format: 'APPLYING' as const,
+      },
+    ],
+    ocr_candidate_units: [7],
+    ocr_pages: [{ position: 7, status: 'FAILED', reason: 'PROVIDER_ERROR' }],
+  };
+  const checked = {
+    id: 'row',
+    status: 'OCR_INCOMPLETE',
+    body_chars: 400,
+    unit_count: 1,
+    substantive_chars: 300,
+    fact_count: 3,
+  };
+
+  it('forwards scoped OCR and question requirements and validates the exact evidence response', async () => {
+    const response = {
+      contract_version: 'knowledge-evidence-check.v1',
+      index_id: checkBody.index_id,
+      items: [checked],
+    };
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await expect(client.evidenceCheck(checkBody)).resolves.toEqual(response);
+    const calls = fetchMock.mock.calls as unknown as Array<
+      [unknown, RequestInit]
+    >;
+    const request = calls[0][1];
+    if (typeof request.body !== 'string')
+      throw new Error('Expected JSON request body');
+    expect(JSON.parse(request.body)).toEqual(checkBody);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { items: [] },
+    { items: [checked, checked] },
+    { items: [{ ...checked, id: 'foreign' }] },
+    { items: [{ ...checked, fact_count: undefined }] },
+    { items: [{ ...checked, status: 'unknown' }] },
+  ])(
+    'rejects missing, duplicate, foreign or malformed evidence results: %j',
+    async ({ items }) => {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            contract_version: 'knowledge-evidence-check.v1',
+            index_id: checkBody.index_id,
+            items,
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        ),
+      );
+      await expect(client.evidenceCheck(checkBody)).rejects.toMatchObject({
+        code: 'RAG_OUTPUT_INVALID',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('continues rejecting malformed successful model output', async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ questions: [] }), {

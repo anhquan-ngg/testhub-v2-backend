@@ -68,6 +68,137 @@ reload the saved plan before retrying. Plan creation and batch submission are
 idempotent for the same owner/key and payload. Reusing a key for other input is a
 conflict. Uploaded reservations remain only in memory, not browser storage/URLs.
 
+## Durable preparation progress and equivalent resume
+
+Plan preparation allows **20 minutes without observed measurable source progress**,
+with a **hard total cap of 60 minutes** per preparation window. Extraction becoming
+usable, the first authorized index/profile pin, an increased completed-chunk
+high-water mark, or the index becoming READY advances the durable progress clock.
+Polling, retries, rate-limit errors, lease recovery, status churn and `updated_at`
+do not advance it. A fresh worker resumes the persisted checkpoint rather than
+starting a fresh window. Both deadlines are checked before preparation, after
+outline I/O and on retryable failures. Idle failure uses `PLAN_SOURCE_TIMEOUT`;
+the hard cap uses `PLAN_SOURCE_TOTAL_TIMEOUT`, with total-cap precedence.
+Explicit `POST /question-generation-plans/:id/retry` for an eligible FAILED plan
+renews both clocks and clears the observation baseline, retaining the original
+creation timestamp, immutable source, existing index/profile and idempotency keys.
+
+Owned detail GET adds `source_progress`, either null or:
+
+```typescript
+{
+  stage: 'EXTRACTING' | 'INDEXING' | 'OUTLINING';
+  completed_chunks: number;
+  total_chunks: number;
+  percent: number | null;
+  index_status: string | null;
+  error_code: string | null;
+}
+```
+
+The summary reads current counters from the exact authorized pinned index even
+while the plan remains WAITING_SOURCE. Percent is floored and clamped to 0..100;
+a zero/unknown denominator yields null, never a fabricated 0/0 completion. A READY
+index is OUTLINING. Unpinned usable sources are INDEXING with zero counters and
+null percent. Unusable sources are EXTRACTING. Missing/revoked/foreign pinned
+indexes and plans outside WAITING_SOURCE/PREPARING/FAILED return null. The error is
+the current index error, otherwise the source extraction error. This field exposes
+no profile/index IDs, storage keys, execution tokens or leases. GET performs no
+writes, preparation, index starts or retries.
+
+Creating an equivalent active plan returns the existing plan with `reused: true`.
+Equivalence requires the same owner, topic, immutable source version and exact
+normalized **ordered** question configs. Different config order/content creates
+a different plan. Failed/review/approved or foreign plans are not candidates.
+An owner/source-scoped PostgreSQL transaction advisory lock serializes concurrent
+creates. Durable owner/key aliases bind every admitted key to its original plan:
+same-key/same-hash replay still returns that plan after it becomes terminal;
+same-key/different-hash remains a conflict. A genuinely new plan returns
+`reused: false`. Ordinary polling never creates a plan.
+
+### Preparation migration rollout
+
+Additive migration `20261125130000_plan_preparation_progress` adds preparation
+start/progress clocks, JSONB observation checkpoints and the owner-scoped request
+key alias table. It backfills original keys. Legacy plans conservatively retain
+their original creation time for both clocks and a baseline of their existing
+source/index state; deployment itself does not count as progress or renew a
+window. Old overdue plans may fail immediately and require explicit retry.
+
+Operator commands from this backend directory, using the established deployment
+environment (these commands were **not** executed against a database here):
+
+```powershell
+npx --no-install prisma migrate deploy
+npx --no-install prisma generate
+npm run build
+```
+
+Apply pending migrations and regenerate the client before deploying the updated
+API/AI worker, then deploy frontend. No new environment variable is required.
+This change does not apply migrations or restart workers. Offline client setup
+and schema validation, without loading `.env` or connecting to a database:
+
+```powershell
+npx --no-install prisma generate --config src\auth\testing\prisma-fixture.config.ts
+npx --no-install prisma validate --config src\auth\testing\prisma-fixture.config.ts
+```
+
+## Explicit OCR recovery from a saved plan
+
+Ordinary upload extraction explicitly sends `ocr_mode=off`; detecting thin or
+image-backed units never authorizes a provider call. A lecturer must save the
+matrix, review the selected scope and explicitly consent to each initial OCR or
+retry action. Source positions are derived from nonempty saved matrix rows on
+the server; the browser cannot submit positions, object keys or another source.
+
+| Route | Strict JSON body | Response |
+| --- | --- | --- |
+| `POST /question-generation-plans/:id/ocr` | `{revision: positive integer, consent: true}` | 202 `{version_id}` |
+| `POST /question-generation-plans/:id/ocr/retry` | `{revision: positive integer, consent: true, version_id: failed OCR child UUID}` | 202 `{version_id}` |
+| `GET /learning-documents/versions/:versionId` | none | Owned safe version summary, `document_id`, `quality`, `ocr_request`, indexes |
+
+`/knowledge-plans` is a compatibility alias for the plan routes. Authentication,
+LECTURER role, current ownership/topic, saved revision, source readiness, archive
+state and library byte quota are rechecked before admission. Only REVIEW_REQUIRED
+or APPROVED plans may request recovery. Same-origin plan/revision initial requests
+return the same child; explicit retries are additionally keyed by failed child ID.
+Owner/plan locks and a database expression unique index enforce this identity.
+No plan, batch, original extraction or source object is overwritten. The new
+version pins the same checked hash/options and owns a separate immutable source
+object, artifact and eventual index. Full source bytes count against library quota.
+
+`ocr_request` exposes origin_plan_id, origin_revision, parent_version_id,
+retry_of_version_id (nullable), server-selected positions, pages, deliveries and
+status PENDING|COMPLETED|INCOMPLETE. Each page has position, status
+PENDING|COMPLETED|NO_TEXT|FAILED|BUDGET_EXHAUSTED|DISABLED and an optional nullable
+allowlisted reason. Quality also exposes ocr_candidate_units (all detected
+candidates), ocr_units (positions with successfully added transcript), and
+ocr_pages. COMPLETED request processing is not a semantic evidence guarantee.
+
+The existing DB outbox/lease worker sends at most 30 positions per delivery and
+preserves earlier successful transcripts in a hash-checked checkpoint. A smaller
+Python PAGE_LIMIT continues only after demonstrable progress; at most 500
+deliveries are allowed. Provider, timeout, daily-budget, disabled/cache and
+ambiguous transport/storage outcomes do not automatically repeat paid work.
+An expired targeted lease finishes INCOMPLETE, not QUEUED. Terminal versions with
+unresolved selected positions never become EXTRACTED. Explicit retry requires a
+terminal INCOMPLETE child of the same saved revision, retries only its unresolved
+selected positions, preserves previous successful spans, and creates another
+immutable version. A repeated retry click returns that same new version.
+
+Polling/reloading only reads GET metadata. Once usable, the lecturer explicitly
+creates a NEW plan from the recovered version using the original question_configs
+(which plan detail now returns). PARTIAL use still requires explicit confirmation;
+new plan preparation creates/pins its own index. Existing plans, frozen batches
+and failed generations are never automatically rerun or redirected.
+
+Deployment requires the additive offline migration
+`20261125120000_document_plan_ocr` (nullable JSONB metadata and partial expression
+unique index), followed by normal Prisma client generation. This implementation
+does not apply it, contact providers, or change existing data. Review/apply using
+the established operator process before deploying code that reads the new column.
+
 ## Retrieval and bank writes
 
 Each nonempty matrix cell supplies its own title/objective/level query and allowed

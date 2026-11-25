@@ -9,6 +9,11 @@ import {
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { DocumentRepository } from '../learning-documents/document.repository';
+import { extractionQualitySchema } from '../learning-documents/document.contract';
+import {
+  planOcrSchema,
+  retryPlanOcrSchema,
+} from '../learning-documents/document-ocr.contract';
 import { RagClient } from '../learning-documents/rag-client.service';
 import { DocumentProcessingError } from '../learning-documents/document-client.service';
 import { DocumentGenerationService } from './document-generation.service';
@@ -88,11 +93,33 @@ export class KnowledgePlanService {
     const matrix = planMatrixSchema.safeParse(plan.matrix);
     return {
       ...plan,
+      question_configs,
       target_total: this.targetTotal(question_configs),
       chapter_matches: matrix.success
         ? await this.repository.matches(owner, plan.topic_id, matrix.data)
         : [],
     };
+  }
+
+  /** Explicit consent creates a separate immutable extraction, never a plan or batch retry. */
+  async requestOcr(owner: string, id: string, input: unknown) {
+    const parsed = planOcrSchema.safeParse(input);
+    if (!parsed.success)
+      throw new BadRequestException('Invalid OCR revision or explicit consent');
+    return this.documents.requestPlanOcr(owner, id, parsed.data.revision);
+  }
+
+  /** A fresh consented retry creates another child; the failed extraction remains immutable. */
+  async retryOcr(owner: string, id: string, input: unknown) {
+    const parsed = retryPlanOcrSchema.safeParse(input);
+    if (!parsed.success)
+      throw new BadRequestException('Invalid OCR retry or explicit consent');
+    return this.documents.requestPlanOcr(
+      owner,
+      id,
+      parsed.data.revision,
+      parsed.data.version_id,
+    );
   }
 
   /** Resume plans after navigation without browser source storage. */
@@ -197,8 +224,78 @@ export class KnowledgePlanService {
     const matrix = planMatrixSchema.parse(plan.matrix);
     this.validateUnits(matrix, outlineSchema.parse(plan.content_map));
     this.assertBatchTotal(matrix, plan.question_configs);
+    await this.assertEvidence(plan, matrix);
     await this.repository.edit(owner, id, parsed.data.revision, matrix, true);
     return this.get(owner, id);
+  }
+
+  /** Require complete, substantive evidence at each row's highest requested cognitive level. */
+  private async assertEvidence(
+    plan: {
+      created_by: string;
+      source_version_id: string;
+      source_index_id?: string | null;
+      source_profile_id?: string | null;
+    },
+    matrix: PlanMatrix,
+  ) {
+    let result: Awaited<ReturnType<RagClient['evidenceCheck']>>;
+    try {
+      if (!plan.source_index_id || !plan.source_profile_id)
+        throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
+      const source = await this.documents.source(
+        plan.created_by,
+        plan.source_version_id,
+      );
+      if (!source) throw new DocumentProcessingError('RAG_OUTPUT_INVALID');
+      const quality = extractionQualitySchema.parse(source.quality);
+      result = await this.client.evidenceCheck({
+        owner_id: plan.created_by,
+        index_id: plan.source_index_id,
+        profile_id: plan.source_profile_id,
+        ocr_candidate_units: quality.ocr_candidate_units,
+        ocr_pages: quality.ocr_pages,
+        items: matrix.rows.map((row) => ({
+          id: row.id,
+          source_units: row.source_units,
+          question_type: row.question_type,
+          question_format:
+            (
+              ['ADVANCED', 'APPLYING', 'UNDERSTANDING', 'KNOWLEDGE'] as const
+            ).find((level) => row.counts[level] > 0) ?? 'KNOWLEDGE',
+        })),
+      });
+    } catch {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'Service Unavailable',
+        code: 'PLAN_EVIDENCE_CHECK_UNAVAILABLE',
+        message:
+          'Evidence could not be verified; retry confirmation when the source and checker are available',
+        retryable: true,
+      });
+    }
+    const names = new Map(matrix.nodes.map((node) => [node.id, node.name]));
+    const rowNode = new Map(matrix.rows.map((row) => [row.id, row.node_id]));
+    const details = result.items
+      .filter((item) => item.status !== 'OK')
+      .map((item) => ({
+        row_id: item.id,
+        node_name: names.get(rowNode.get(item.id) ?? '') ?? '',
+        body_chars: item.body_chars,
+        substantive_chars: item.substantive_chars,
+        fact_count: item.fact_count,
+        status: item.status,
+      }));
+    if (details.length)
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'PLAN_EVIDENCE_INSUFFICIENT',
+        message:
+          'Some plan rows lack complete or sufficiently substantive evidence; review source pages, OCR, question type and cognitive level',
+        details,
+      });
   }
 
   /** Build a source-pinned generation command exclusively from the approved stored revision. */
@@ -248,20 +345,13 @@ export class KnowledgePlanService {
           candidate.created_by,
           candidate.id,
         );
-        if (Date.now() - plan.created_at.getTime() > 20 * 60_000) {
-          await this.repository.finish(plan.id, token, plan.created_by, {
-            status: 'FAILED',
-            error_code: 'PLAN_SOURCE_TIMEOUT',
-          });
-          continue;
-        }
         const source = await this.documents.source(
           plan.created_by,
           plan.source_version_id,
         );
         if (!source || source.document.topic_id !== plan.topic_id)
           throw new NotFoundException('Source unavailable');
-        const state = await this.sources.prepare({
+        const input = {
           created_by: plan.created_by,
           topic_id: plan.topic_id,
           chapter_id: source.document.chapter_id,
@@ -269,7 +359,27 @@ export class KnowledgePlanService {
           source_index_id: plan.source_index_id,
           source_profile_id: plan.source_profile_id,
           source_query: '',
-        });
+        };
+        const observed = await this.sources.inspect(input);
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            observed,
+          ))
+        )
+          continue;
+        const state = await this.sources.prepare(input);
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            state,
+          ))
+        )
+          continue;
         if (!state.ready || !state.index) {
           await this.repository.finish(plan.id, token, plan.created_by, {
             status: 'WAITING_SOURCE',
@@ -289,6 +399,7 @@ export class KnowledgePlanService {
           title: source.document.title,
         });
         if (
+          raw.index_id !== state.index.id ||
           raw.version_id !== source.id ||
           raw.document_id !== source.document_id ||
           raw.source_sha256 !== source.source_sha256
@@ -301,6 +412,26 @@ export class KnowledgePlanService {
         };
         const configs = questionConfigsSchema.parse(plan.question_configs);
         const matrix = buildMatrix(map.nodes, configs);
+        const current = await this.sources.inspect({
+          ...input,
+          source_index_id: state.index.id,
+          source_profile_id: state.index.profile_id,
+        });
+        if (
+          !(await this.repository.checkpoint(
+            plan.created_by,
+            plan.id,
+            token,
+            current,
+          ))
+        )
+          continue;
+        if (!current.ready) {
+          await this.repository.finish(plan.id, token, plan.created_by, {
+            status: 'WAITING_SOURCE',
+          });
+          continue;
+        }
         await this.repository.finish(plan.id, token, plan.created_by, {
           status: 'REVIEW_REQUIRED',
           content_map: map,
@@ -310,6 +441,14 @@ export class KnowledgePlanService {
           source_profile_id: state.index.profile_id,
         });
       } catch (error) {
+        if (
+          !(await this.repository.checkpoint(
+            candidate.created_by,
+            candidate.id,
+            token,
+          ))
+        )
+          continue;
         const retry =
           (error instanceof DocumentProcessingError && error.retryable) ||
           (error instanceof HttpException &&

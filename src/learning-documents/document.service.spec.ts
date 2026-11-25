@@ -204,7 +204,7 @@ describe('Document upload and source boundaries', () => {
     const artifact = Buffer.from(
       JSON.stringify({
         contract_version: 'document-extraction.v1',
-        parser_version: 'pdf/fixture;text/v3',
+        parser_version: 'pdf/fixture;text/v4',
         source_type: 'PDF',
         source_sha256: hash,
         include_notes: false,
@@ -219,7 +219,7 @@ describe('Document upload and source boundaries', () => {
       status: 'EXTRACTED',
       artifact_key: 'donor-artifact',
       artifact_sha256: artifactHash,
-      parser_version: 'pdf/fixture;text/v3',
+      parser_version: 'pdf/fixture;text/v4',
       unit_count: 1,
       warnings: [],
     };

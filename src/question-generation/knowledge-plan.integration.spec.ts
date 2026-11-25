@@ -159,6 +159,63 @@ integration('Knowledge plans: real PostgreSQL commit boundary', () => {
     ).rejects.toThrow();
     expect(await prisma.chapter.count()).toBe(0);
   });
+  it('serializes distinct-key equivalent creation, keeps durable replays and respects ordered configs', async () => {
+    const input = {
+      topic_id: topic,
+      version_id: version,
+      question_configs: [
+        {
+          question_type: 'SINGLE_CHOICE' as const,
+          question_format: 'KNOWLEDGE' as const,
+          count: 1,
+        },
+        {
+          question_type: 'SINGLE_CHOICE' as const,
+          question_format: 'UNDERSTANDING' as const,
+          count: 1,
+        },
+      ],
+    };
+    const [first, second] = await Promise.all([
+      plans.create(owner, input, 'equivalent-first-key', '1'.repeat(64)),
+      plans.create(owner, input, 'equivalent-second-key', '1'.repeat(64)),
+    ]);
+    expect(first.id).toBe(second.id);
+    expect([first.reused, second.reused].sort()).toEqual([false, true]);
+    expect(
+      await prisma.knowledgePlanRequestKey.count({
+        where: { plan_id: first.id },
+      }),
+    ).toBe(2);
+    const reordered = await plans.create(
+      owner,
+      { ...input, question_configs: [...input.question_configs].reverse() },
+      'reordered-config-key',
+      '2'.repeat(64),
+    );
+    expect(reordered.id).not.toBe(first.id);
+    await prisma.knowledgePlan.update({
+      where: { id: first.id },
+      data: { status: 'REVIEW_REQUIRED' },
+    });
+    expect(
+      (
+        await plans.create(
+          owner,
+          input,
+          'equivalent-second-key',
+          '1'.repeat(64),
+        )
+      ).id,
+    ).toBe(first.id);
+    await expect(
+      plans.create(owner, input, 'equivalent-second-key', '3'.repeat(64)),
+    ).rejects.toThrow('Idempotency-Key already used');
+    expect(
+      (await plans.create(owner, input, 'new-after-review-key', '1'.repeat(64)))
+        .id,
+    ).not.toBe(first.id);
+  });
   it('creates arbitrary-depth selected branches atomically; reuses chapters and handles concurrent commit/replay', async () => {
     const stored = await plans.create(
       owner,

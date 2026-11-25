@@ -5,7 +5,11 @@ import { RagRepository } from './rag.repository';
 import { RagClient } from './rag-client.service';
 import { DocumentProcessingError } from './document-client.service';
 import { extractionSchema, isUsableSource } from './document.contract';
-import { RagCommand, RagProgress } from './rag.contract';
+import {
+  RagCommand,
+  RagProgress,
+  RAG_RATE_LIMIT_RETRY_MS,
+} from './rag.contract';
 
 type IndexRow = NonNullable<Awaited<ReturnType<RagRepository['claim']>>>;
 /** Derive internal scope solely from persisted business metadata. */
@@ -85,11 +89,16 @@ export class RagExecution {
           ? error
           : new DocumentProcessingError('RAG_STORAGE_UNAVAILABLE', true);
       const failures = row.failure_count + 1;
+      // A minute-window throttle cannot recover on the usual 10s/20s retry schedule.
+      const retryDelay =
+        safe.retryable && safe.code === 'RAG_EMBEDDING_RATE_LIMITED'
+          ? Math.max(RAG_RATE_LIMIT_RETRY_MS, 5000 * 2 ** failures)
+          : 5000 * 2 ** failures;
       await this.repository.finish(id, token, row.owner_id, {
         status: safe.retryable && failures < 3 ? 'QUEUED' : 'FAILED',
         failure_count: failures,
         error_code: safe.code,
-        next_dispatch_at: new Date(Date.now() + 5000 * 2 ** failures),
+        next_dispatch_at: new Date(Date.now() + retryDelay),
       });
     }
   }

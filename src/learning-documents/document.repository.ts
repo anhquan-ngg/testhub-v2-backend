@@ -1,7 +1,23 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, UserRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { DOCUMENT_LEASE_MS, documentQuota } from './document.contract';
+import {
+  DOCUMENT_LEASE_MS,
+  documentQuota,
+  extractionQualitySchema,
+} from './document.contract';
+import { randomUUID } from 'node:crypto';
+import { planMatrixSchema } from '../question-generation/knowledge-plan.contract';
+import {
+  OCR_MAX_DELIVERIES,
+  OcrRequest,
+  ocrRequestSchema,
+} from './document-ocr.contract';
 
 /** Business ownership and fenced processing state. No source text is stored here. */
 @Injectable()
@@ -108,6 +124,214 @@ export class DocumentRepository {
           },
           select: { id: true },
         });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
+  }
+
+  /** Allocate an immutable OCR child from a saved plan, serialized by owner and plan locks. */
+  requestPlanOcr(
+    ownerId: string,
+    planId: string,
+    revision: number,
+    retryVersionId?: string,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${ownerId}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM knowledge_plans WHERE id = ${planId}::uuid FOR UPDATE`;
+        const plan = await tx.knowledgePlan.findFirst({
+          where: {
+            id: planId,
+            created_by: ownerId,
+            creator: { role: 'LECTURER', status: 'ACTIVE' },
+            topic: { created_by: ownerId, is_deleted: false },
+            sourceVersion: {
+              document: {
+                ...this.scope(ownerId),
+                purged_at: null,
+                archived_at: null,
+              },
+            },
+          },
+        });
+        if (!plan) throw new NotFoundException('Plan unavailable');
+        if (plan.revision !== revision)
+          throw new ConflictException('PLAN_REVISION_CONFLICT');
+        const old = await tx.learningDocumentVersion.findFirst({
+          where: {
+            document: this.scope(ownerId),
+            AND: [
+              { ocr_request: { path: ['origin_plan_id'], equals: planId } },
+              { ocr_request: { path: ['origin_revision'], equals: revision } },
+              {
+                ocr_request: {
+                  path: ['retry_of_version_id'],
+                  equals: retryVersionId ?? Prisma.JsonNull,
+                },
+              },
+            ],
+          },
+          select: { id: true },
+        });
+        if (old) return { version_id: old.id };
+        if (!['REVIEW_REQUIRED', 'APPROVED'].includes(plan.status))
+          throw new ConflictException('PLAN_NOT_READY');
+        let source = await tx.learningDocumentVersion.findFirst({
+          where: {
+            id: plan.source_version_id,
+            status: { in: ['EXTRACTED', 'PARTIAL', 'OCR_REQUIRED'] },
+            source_key: { not: null },
+            source_sha256: { not: null },
+            artifact_key: { not: null },
+            artifact_sha256: { not: null },
+            document: {
+              ...this.scope(ownerId),
+              topic_id: plan.topic_id,
+              purged_at: null,
+              archived_at: null,
+            },
+          },
+        });
+        if (!source?.unit_count)
+          throw new ConflictException('DOCUMENT_SOURCE_NOT_READY');
+        const unitCount = source.unit_count;
+        const matrix = planMatrixSchema.safeParse(plan.matrix);
+        if (!matrix.success) throw new ConflictException('PLAN_MATRIX_INVALID');
+        const quality = extractionQualitySchema.safeParse(source.quality);
+        const candidates = new Set(
+          quality.success ? quality.data.ocr_candidate_units : [],
+        );
+        const kind = source.source_type === 'PDF' ? 'PAGE' : 'SLIDE';
+        const positions = [
+          ...new Set(
+            matrix.data.rows
+              .filter((row) =>
+                Object.values(row.counts).some((count) => count > 0),
+              )
+              .sort(
+                (a, b) =>
+                  Object.values(b.counts).reduce((n, count) => n + count, 0) -
+                  Object.values(a.counts).reduce((n, count) => n + count, 0),
+              )
+              .flatMap((row) =>
+                row.source_units
+                  .filter((unit) => unit.kind === kind)
+                  .map((unit) => unit.position),
+              ),
+          ),
+        ];
+        if (
+          !positions.length ||
+          positions.length > 500 ||
+          positions.some((position) => position > unitCount)
+        )
+          throw new BadRequestException('PLAN_OCR_SCOPE_INVALID');
+        positions.sort(
+          (a, b) => Number(candidates.has(b)) - Number(candidates.has(a)),
+        );
+        let retryPages: Set<number> | undefined;
+        if (retryVersionId) {
+          const target = await tx.learningDocumentVersion.findFirst({
+            where: {
+              id: retryVersionId,
+              document_id: source.document_id,
+              source_sha256: source.source_sha256,
+              status: { in: ['FAILED', 'PARTIAL', 'OCR_REQUIRED'] },
+              document: this.scope(ownerId),
+            },
+          });
+          const prior = ocrRequestSchema.safeParse(target?.ocr_request);
+          if (
+            !target ||
+            !prior.success ||
+            prior.data.status !== 'INCOMPLETE' ||
+            prior.data.origin_plan_id !== planId ||
+            prior.data.origin_revision !== revision
+          )
+            throw new ConflictException('DOCUMENT_OCR_NOT_RETRYABLE');
+          retryPages = new Set(
+            prior.data.pages
+              .filter((page) => !['COMPLETED', 'NO_TEXT'].includes(page.status))
+              .map((page) => page.position),
+          );
+          const checkpoint = target.artifact_key
+            ? target
+            : await tx.learningDocumentVersion.findFirst({
+                where: {
+                  id: prior.data.parent_version_id,
+                  document_id: source.document_id,
+                  source_sha256: source.source_sha256,
+                  artifact_key: { not: null },
+                  artifact_sha256: { not: null },
+                  source_key: { not: null },
+                  document: this.scope(ownerId),
+                },
+              });
+          if (
+            !checkpoint?.unit_count ||
+            !checkpoint.source_key ||
+            !checkpoint.artifact_sha256
+          )
+            throw new ConflictException('DOCUMENT_CHECKPOINT_MISSING');
+          source = checkpoint;
+        }
+        const selected = retryPages
+          ? positions.filter((position) => retryPages.has(position))
+          : positions;
+        if (!selected.length)
+          throw new ConflictException('DOCUMENT_OCR_NOT_RETRYABLE');
+        await this.reserveQuota(tx, {
+          ownerId,
+          size: source.declared_size,
+          newDocument: false,
+        });
+        const changed = await tx.learningDocument.updateMany({
+          where: {
+            id: source.document_id,
+            ...this.scope(ownerId),
+            archived_at: null,
+            purged_at: null,
+          },
+          data: { next_version: { increment: 1 } },
+        });
+        if (!changed.count) throw new NotFoundException('Document unavailable');
+        const document = await tx.learningDocument.findUniqueOrThrow({
+          where: { id: source.document_id },
+          select: { next_version: true },
+        });
+        const id = randomUUID();
+        const request: OcrRequest = {
+          origin_plan_id: planId,
+          origin_revision: revision,
+          parent_version_id: source.id,
+          retry_of_version_id: retryVersionId ?? null,
+          positions: selected,
+          pages: selected.map((position) => ({ position, status: 'PENDING' })),
+          deliveries: 0,
+          status: 'PENDING',
+        };
+        await tx.learningDocumentVersion.create({
+          data: {
+            id,
+            document_id: source.document_id,
+            version: document.next_version - 1,
+            file_name: source.file_name,
+            source_type: source.source_type,
+            mime_type: source.mime_type,
+            declared_size: source.declared_size,
+            include_notes: source.include_notes,
+            consented_at: new Date(),
+            upload_key: `learning-documents/${source.document_id}/${id}/upload`,
+            upload_expires_at: new Date(),
+            source_key: `learning-documents/${source.document_id}/${id}/source/${source.source_sha256}`,
+            source_sha256: source.source_sha256,
+            ocr_request: request,
+            status: 'QUEUED',
+            next_dispatch_at: new Date(),
+          },
+        });
+        return { version_id: id };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
@@ -248,6 +472,7 @@ export class DocumentRepository {
         source_sha256: sha256,
         source_type: sourceType,
         include_notes: includeNotes,
+        ocr_request: { equals: Prisma.DbNull },
         status: { in: ['EXTRACTED', 'PARTIAL', 'OCR_REQUIRED'] },
         artifact_key: { not: null },
         artifact_sha256: { not: null },
@@ -343,6 +568,14 @@ export class DocumentRepository {
     return this.prisma.learningDocument.updateMany({
       where: { id, archived_at: { not: null }, ...this.scope(ownerId) },
       data: { archived_at: null },
+    });
+  }
+
+  /** Safe owner-scoped polling by immutable version ID; never expose object keys. */
+  versionDetail(ownerId: string, id: string) {
+    return this.prisma.learningDocumentVersion.findFirst({
+      where: { id, document: this.scope(ownerId) },
+      select: versionSelect,
     });
   }
 
@@ -528,8 +761,57 @@ export class DocumentRepository {
       status: 'PROCESSING' as const,
       lease_expires_at: { lt: new Date() },
     };
+    const interrupted = await this.prisma.learningDocumentVersion.findMany({
+      where: { ...where, ocr_request: { not: Prisma.DbNull } },
+      take: 25,
+      select: {
+        id: true,
+        execution_id: true,
+        ocr_request: true,
+        artifact_key: true,
+        quality: true,
+      },
+    });
+    for (const version of interrupted) {
+      const parsed = ocrRequestSchema.safeParse(version.ocr_request);
+      const quality = extractionQualitySchema.safeParse(version.quality);
+      const checkpointStatus =
+        quality.success && quality.data.text_units > 0
+          ? 'PARTIAL'
+          : 'OCR_REQUIRED';
+      await this.prisma.learningDocumentVersion.updateMany({
+        where: { ...where, id: version.id, execution_id: version.execution_id },
+        data: {
+          status: version.artifact_key ? checkpointStatus : 'FAILED',
+          error_code: 'DOCUMENT_OCR_INTERRUPTED',
+          execution_id: null,
+          lease_expires_at: null,
+          ...(parsed.success
+            ? {
+                ocr_request: {
+                  ...parsed.data,
+                  status: 'INCOMPLETE',
+                  pages: parsed.data.pages.map((page) =>
+                    page.status === 'PENDING'
+                      ? {
+                          position: page.position,
+                          status: 'FAILED',
+                          reason: 'PROVIDER_ERROR',
+                        }
+                      : page,
+                  ),
+                },
+              }
+            : {}),
+        },
+      });
+    }
     await this.prisma.learningDocumentVersion.updateMany({
-      where: { ...where, extraction_count: { gte: 3 } },
+      where: {
+        ...where,
+        ocr_request: { equals: Prisma.DbNull },
+        extraction_count: { gte: 3 },
+      },
       data: {
         status: 'FAILED',
         error_code: 'DOCUMENT_RETRY_EXHAUSTED',
@@ -538,7 +820,11 @@ export class DocumentRepository {
       },
     });
     await this.prisma.learningDocumentVersion.updateMany({
-      where: { ...where, extraction_count: { lt: 3 } },
+      where: {
+        ...where,
+        ocr_request: { equals: Prisma.DbNull },
+        extraction_count: { lt: 3 },
+      },
       data: {
         status: 'QUEUED',
         execution_id: null,
@@ -584,7 +870,16 @@ export class DocumentRepository {
       where: {
         id,
         status: 'QUEUED',
-        extraction_count: { lt: 3 },
+        OR: [
+          {
+            ocr_request: { equals: Prisma.DbNull },
+            extraction_count: { lt: 3 },
+          },
+          {
+            ocr_request: { path: ['status'], equals: 'PENDING' },
+            extraction_count: { lt: OCR_MAX_DELIVERIES },
+          },
+        ],
         document: this.scope(candidate.document.created_by),
       },
       data: {
@@ -641,6 +936,8 @@ import { indexSelect } from './rag.contract';
 const versionSelect = {
   indexes: { orderBy: { created_at: 'desc' }, take: 10, select: indexSelect },
   id: true,
+  document_id: true,
+  ocr_request: true,
   version: true,
   created_at: true,
   file_name: true,

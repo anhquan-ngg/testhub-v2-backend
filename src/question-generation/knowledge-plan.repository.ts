@@ -13,6 +13,13 @@ import {
   topologicalNodes,
 } from './knowledge-plan.contract';
 import type { QuestionConfig } from './question-generation.contract';
+import { isUsableSource } from '../learning-documents/document.contract';
+import {
+  observePlanSource,
+  planSourceTimeout,
+  summarizePlanSource,
+  PlanSourceState,
+} from './knowledge-plan-progress';
 
 const publicSelect = {
   id: true,
@@ -25,7 +32,7 @@ const publicSelect = {
   content_map: true,
   matrix: true,
   error_code: true,
-  sourceVersion: { select: { file_name: true } },
+  sourceVersion: { select: { file_name: true, document_id: true } },
 } satisfies Prisma.KnowledgePlanSelect;
 
 /** Durable source preparation and lecturer-reviewed plans; never creates bank chapters. */
@@ -59,23 +66,20 @@ export class KnowledgePlanRepository {
   ) {
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const old = await tx.knowledgePlan.findUnique({
-          where: {
-            created_by_idempotency_key: {
-              created_by: owner,
-              idempotency_key: key,
-            },
-          },
+        // The immutable source serializes equivalent creates across all API processes.
+        await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${owner + ':' + input.topic_id + ':' + input.version_id}, 0))`;
+        const old = await tx.knowledgePlanRequestKey.findUnique({
+          where: { created_by_key: { created_by: owner, key } },
         });
         if (old) {
           if (old.request_hash !== hash)
             throw new ConflictException('Idempotency-Key already used');
           const owned = await tx.knowledgePlan.findFirst({
-            where: { id: old.id, ...this.scope(owner) },
+            where: { id: old.plan_id, ...this.scope(owner) },
             select: publicSelect,
           });
           if (!owned) throw new NotFoundException('Plan unavailable');
-          return owned;
+          return { ...owned, reused: true };
         }
         const version = await tx.learningDocumentVersion.findFirst({
           where: {
@@ -94,21 +98,50 @@ export class KnowledgePlanRepository {
         });
         if (!version)
           throw new NotFoundException('Document source unavailable');
-        await tx.learningDocument.update({
-          where: { id: version.document_id },
+        const locked = await tx.learningDocument.updateMany({
+          where: {
+            id: version.document_id,
+            ...this.documents.scope(owner),
+            topic_id: input.topic_id,
+            archived_at: null,
+          },
           data: { last_used_at: new Date() },
         });
-        return tx.knowledgePlan.create({
-          data: {
-            created_by: owner,
+        if (!locked.count)
+          throw new NotFoundException('Document source unavailable');
+        const equivalent = await tx.knowledgePlan.findFirst({
+          where: {
+            ...this.scope(owner),
             topic_id: input.topic_id,
             source_version_id: version.id,
-            question_configs: input.question_configs,
-            idempotency_key: key,
-            request_hash: hash,
+            status: { in: ['WAITING_SOURCE', 'PREPARING'] },
+            question_configs: { equals: input.question_configs },
           },
+          orderBy: [{ created_at: 'asc' }, { id: 'asc' }],
           select: publicSelect,
         });
+        const plan =
+          equivalent ??
+          (await tx.knowledgePlan.create({
+            data: {
+              created_by: owner,
+              topic_id: input.topic_id,
+              source_version_id: version.id,
+              question_configs: input.question_configs,
+              idempotency_key: key,
+              request_hash: hash,
+            },
+            select: publicSelect,
+          }));
+        await tx.knowledgePlanRequestKey.create({
+          data: {
+            created_by: owner,
+            key,
+            request_hash: hash,
+            plan_id: plan.id,
+          },
+        });
+        return { ...plan, reused: equivalent !== null };
       });
     } catch (error) {
       if (
@@ -116,19 +149,17 @@ export class KnowledgePlanRepository {
         error.code !== 'P2002'
       )
         throw error;
-      const old = await this.prisma.knowledgePlan.findFirst({
-        where: {
-          created_by: owner,
-          idempotency_key: key,
-          ...this.scope(owner),
-        },
-        select: { ...publicSelect, request_hash: true },
+      const alias = await this.prisma.knowledgePlanRequestKey.findUnique({
+        where: { created_by_key: { created_by: owner, key } },
       });
-      if (!old || old.request_hash !== hash)
+      if (!alias || alias.request_hash !== hash)
         throw new ConflictException('Idempotency-Key already used');
-      const { request_hash, ...safe } = old;
-      void request_hash;
-      return safe;
+      const old = await this.prisma.knowledgePlan.findFirst({
+        where: { id: alias.plan_id, ...this.scope(owner) },
+        select: publicSelect,
+      });
+      if (!old) throw new NotFoundException('Plan unavailable');
+      return { ...old, reused: true };
     }
   }
 
@@ -158,7 +189,7 @@ export class KnowledgePlanRepository {
           status: true,
           revision: true,
           error_code: true,
-          sourceVersion: { select: { file_name: true } },
+          sourceVersion: { select: { file_name: true, document_id: true } },
         },
       }),
       this.prisma.knowledgePlan.count({ where }),
@@ -168,12 +199,78 @@ export class KnowledgePlanRepository {
 
   /** Return only display/proposal fields; no object keys, internal leases or embeddings. */
   async get(owner: string, id: string) {
-    const value = await this.prisma.knowledgePlan.findFirst({
-      where: { id, ...this.scope(owner) },
-      select: publicSelect,
-    });
-    if (!value) throw new NotFoundException('Plan unavailable');
-    return value;
+    return this.prisma.$transaction(
+      async (tx) => {
+        const value = await tx.knowledgePlan.findFirst({
+          where: { id, ...this.scope(owner) },
+          select: {
+            ...publicSelect,
+            source_index_id: true,
+            source_profile_id: true,
+            sourceVersion: {
+              select: {
+                file_name: true,
+                document_id: true,
+                status: true,
+                partial_confirmed_at: true,
+                error_code: true,
+              },
+            },
+          },
+        });
+        if (!value) throw new NotFoundException('Plan unavailable');
+        const { source_index_id, source_profile_id, sourceVersion, ...safe } =
+          value;
+        const index =
+          source_index_id && source_profile_id
+            ? await tx.learningDocumentIndex.findFirst({
+                where: {
+                  id: source_index_id,
+                  profile_id: source_profile_id,
+                  version_id: value.source_version_id,
+                  owner_id: owner,
+                  status: { not: 'REVOKED' },
+                  version: { document: this.documents.scope(owner) },
+                },
+                select: {
+                  id: true,
+                  profile_id: true,
+                  status: true,
+                  chunk_count: true,
+                  completed_chunks: true,
+                  error_code: true,
+                },
+              })
+            : null;
+        const usable = isUsableSource(
+          sourceVersion.status,
+          sourceVersion.partial_confirmed_at,
+        );
+        return {
+          ...safe,
+          sourceVersion: {
+            file_name: sourceVersion.file_name,
+            document_id: sourceVersion.document_id,
+          },
+          source_progress:
+            (source_index_id && !index) ||
+            !['WAITING_SOURCE', 'PREPARING', 'FAILED'].includes(value.status)
+              ? null
+              : {
+                  ...summarizePlanSource({
+                    stage: !usable
+                      ? 'EXTRACTING'
+                      : index?.status === 'READY'
+                        ? 'READY'
+                        : 'INDEXING',
+                    index,
+                  }),
+                  error_code: index?.error_code ?? sourceVersion.error_code,
+                },
+        };
+      },
+      { isolationLevel: 'RepeatableRead' },
+    );
   }
 
   /** Claim/recover pure preparation work; no paid question generation occurs here. */
@@ -232,6 +329,68 @@ export class KnowledgePlanRepository {
     return changed.count ? token : null;
   }
 
+  /** Persist measurable source progress under the execution/lease fence and enforce both clocks. */
+  async checkpoint(
+    owner: string,
+    id: string,
+    token: string,
+    state?: PlanSourceState,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const where = {
+        id,
+        execution_id: token,
+        status: 'PREPARING',
+        lease_expires_at: { gt: now },
+        ...this.scope(owner),
+      };
+      const plan = await tx.knowledgePlan.findFirst({ where });
+      if (!plan) return false;
+      if (
+        state?.index &&
+        plan.source_index_id &&
+        (plan.source_index_id !== state.index.id ||
+          plan.source_profile_id !== state.index.profile_id)
+      )
+        return false;
+      const observation = state
+        ? observePlanSource(plan.source_checkpoint, state)
+        : null;
+      const progressAt = observation?.advanced ? now : plan.source_progress_at;
+      const code = planSourceTimeout(
+        { ...plan, source_progress_at: progressAt },
+        now.getTime(),
+      );
+      if (!observation && !code) return true;
+      const changed = await tx.knowledgePlan.updateMany({
+        where,
+        data: code
+          ? {
+              status: 'FAILED',
+              error_code: code,
+              execution_id: null,
+              lease_expires_at: null,
+            }
+          : {
+              ...(observation
+                ? {
+                    source_checkpoint: observation.checkpoint,
+                    source_progress_at: progressAt,
+                  }
+                : {}),
+              ...(state?.index
+                ? {
+                    source_index_id: state.index.id,
+                    source_profile_id: state.index.profile_id,
+                  }
+                : {}),
+            },
+      });
+      return changed.count > 0 && !code;
+    });
+  }
+
   /** Store one source-pinned proposal or a bounded preparation checkpoint. */
   finish(
     id: string,
@@ -244,6 +403,7 @@ export class KnowledgePlanRepository {
         id,
         execution_id: token,
         status: 'PREPARING',
+        lease_expires_at: { gt: new Date() },
         ...this.scope(owner),
       },
       data: {
@@ -255,10 +415,7 @@ export class KnowledgePlanRepository {
     });
   }
 
-  /**
-   * Re-queue a FAILED plan. The creation time is renewed so the 20-minute
-   * preparation window starts again; lease and error state are cleared.
-   */
+  /** Explicit failed retry renews both preparation clocks, never the original creation time. */
   retry(owner: string, id: string) {
     return this.prisma.knowledgePlan.updateMany({
       where: { id, status: 'FAILED', ...this.scope(owner) },
@@ -268,7 +425,9 @@ export class KnowledgePlanRepository {
         execution_id: null,
         lease_expires_at: null,
         next_prepare_at: new Date(),
-        created_at: new Date(),
+        preparation_started_at: new Date(),
+        source_progress_at: new Date(),
+        source_checkpoint: Prisma.DbNull,
       },
     });
   }

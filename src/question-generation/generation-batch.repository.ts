@@ -709,10 +709,15 @@ export class GenerationBatchRepository {
     });
   }
 
-  /** A delivery failure never discards the PostgreSQL command. */
-  markDispatch(id: string, delay: number, success: boolean) {
-    return this.prisma.questionGenerationOutbox.update({
-      where: { id },
+  /** Record delivery only while the observed schedule is still current. */
+  markDispatch(
+    id: string,
+    delay: number,
+    success: boolean,
+    expectedDispatchAt: Date,
+  ) {
+    return this.prisma.questionGenerationOutbox.updateMany({
+      where: { id, next_dispatch_at: expectedDispatchAt },
       data: {
         dispatch_count: { increment: 1 },
         next_dispatch_at: new Date(Date.now() + delay),
